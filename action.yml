@@ -1,0 +1,30 @@
+name: AWS Secrets Manager Reader
+description:
+  Read secrets from AWS Secrets Manager and expose them as masked environment
+  variables
+author: LTomer
+
+branding:
+  icon: lock
+  color: orange
+
+inputs:
+  source-type:
+    description: "'inline' or 'file-path'"
+    required: true
+    default: inline
+  data:
+    description: Multiline instructions (used when source-type is inline)
+    required: false
+  data-file:
+    description: Path to instructions file (used when source-type is file-path)
+    required: false
+  region:
+    description:
+      Default AWS region. Can be overridden per-line with @region suffix or
+      region <= value
+    required: false
+
+runs:
+  using: node24
+  main: dist/index.js
