@@ -337,3 +337,19 @@ The `DB_CONFIG_FILE` env var will contain the path to the rendered file.
 - File paths set by file-based actions (`raw`, `base64`, `rep`) are **not**
   masked — only the content is sensitive.
 - Binary secrets (non-`SecretString`) are not supported.
+
+---
+
+## Attribution
+
+This project is licensed under the [MIT License](LICENSE). You are free to use,
+copy, modify, and distribute this software.
+
+If you fork or adapt this project, please consider giving credit by:
+
+- Mentioning **[LTomer](https://github.com/LTomer)** as the original author
+- Linking back to the original repository:
+  **<https://github.com/LTomer/aws-sm-reader-action>**
+
+This is not a legal requirement of the MIT license, but it is appreciated and
+helps others discover the original project. Thank you! 🙏

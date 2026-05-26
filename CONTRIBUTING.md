@@ -256,8 +256,8 @@ to step 5.
 
 ### 4. Fix any breaking changes
 
-Major version bumps may introduce breaking changes (e.g. TypeScript 6.x requiring
-explicit `rootDir`). Fix them on the same branch:
+Major version bumps may introduce breaking changes (e.g. TypeScript 6.x
+requiring explicit `rootDir`). Fix them on the same branch:
 
 ```bash
 # make your fixes, then:
@@ -295,9 +295,9 @@ rules, ensure CI passes before merging.
 
 ### Tips
 
-- **Group related bumps**: If multiple Dependabot PRs update packages in the same
-  ecosystem (e.g. `@typescript-eslint/*`), consider merging them together to avoid
-  repeated rebuilds.
+- **Group related bumps**: If multiple Dependabot PRs update packages in the
+  same ecosystem (e.g. `@typescript-eslint/*`), consider merging them together
+  to avoid repeated rebuilds.
 - **Lock file only**: If the PR only changes `package-lock.json` (transitive
   dependency), the risk is low — but still run `npm run all` to confirm.
 - **Breaking changes log**: When a major dependency upgrade requires source

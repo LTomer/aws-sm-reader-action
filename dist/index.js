@@ -35185,7 +35185,7 @@ const commonParams$4 = {
     UseDualStack: { type: "builtInParams", name: "useDualstackEndpoint" },
 };
 
-var version$1 = "3.1048.0";
+var version$1 = "3.1054.0";
 var packageInfo$1 = {
 	version: version$1};
 
@@ -36064,7 +36064,7 @@ const parseJsonBody = (streamBody, context) => collectBodyString(streamBody, con
     return {};
 });
 const findKey = (object, key) => Object.keys(object).find((k) => k.toLowerCase() === key.toLowerCase());
-const sanitizeErrorCode = (rawValue, removeNamespace = true) => {
+const sanitizeErrorCode = (rawValue) => {
     let cleanValue = rawValue;
     if (typeof cleanValue === "number") {
         cleanValue = cleanValue.toString();
@@ -36075,36 +36075,36 @@ const sanitizeErrorCode = (rawValue, removeNamespace = true) => {
     if (cleanValue.indexOf(":") >= 0) {
         cleanValue = cleanValue.split(":")[0];
     }
-    if (removeNamespace && cleanValue.indexOf("#") >= 0) {
+    if (cleanValue.indexOf("#") >= 0) {
         cleanValue = cleanValue.split("#")[1];
     }
     return cleanValue;
 };
 const loadRestJsonErrorCode = (output, data) => {
-    return loadErrorCode(output, data, true, ["header", "code", "type"]);
+    return loadErrorCode(output, data, ["header", "code", "type"]);
 };
-const loadJsonRpcErrorCode = (output, data, removeNamespace, queryCompat = false) => {
-    return loadErrorCode(output, data, removeNamespace, queryCompat ? ["code", "header", "type"] : ["type", "code", "header"]);
+const loadJsonRpcErrorCode = (output, data, queryCompat = false) => {
+    return loadErrorCode(output, data, queryCompat ? ["code", "header", "type"] : ["type", "code", "header"]);
 };
-const loadErrorCode = ({ headers }, data, removeNamespace, order) => {
+const loadErrorCode = ({ headers }, data, order) => {
     while (order.length > 0) {
         const location = order.shift();
         switch (location) {
             case "header":
                 const headerKey = findKey(headers ?? {}, "x-amzn-errortype");
                 if (headerKey !== undefined) {
-                    return sanitizeErrorCode(headers[headerKey], removeNamespace);
+                    return sanitizeErrorCode(headers[headerKey]);
                 }
                 break;
             case "code":
                 const codeKey = findKey(data ?? {}, "code");
                 if (codeKey && data[codeKey] !== undefined) {
-                    return sanitizeErrorCode(data[codeKey], removeNamespace);
+                    return sanitizeErrorCode(data[codeKey]);
                 }
                 break;
             case "type":
                 if (data?.__type !== undefined) {
-                    return sanitizeErrorCode(data.__type, removeNamespace);
+                    return sanitizeErrorCode(data.__type);
                 }
                 break;
         }
@@ -36545,7 +36545,7 @@ class AwsJsonRpcProtocol extends RpcProtocol {
         if (awsQueryCompatible) {
             this.mixin.setQueryCompatError(dataObject, response);
         }
-        const errorIdentifier = loadJsonRpcErrorCode(response, dataObject, this.getJsonRpcVersion() === "1.1", awsQueryCompatible) ?? "Unknown";
+        const errorIdentifier = loadJsonRpcErrorCode(response, dataObject, awsQueryCompatible) ?? "Unknown";
         this.mixin.compose(this.compositeErrorRegistry, errorIdentifier, this.options.defaultNamespace);
         const { errorSchema, errorMetadata } = await this.mixin.getErrorSchemaOrThrowBaseException(errorIdentifier, this.options.defaultNamespace, response, dataObject, metadata, awsQueryCompatible ? this.mixin.findQueryCompatibleError : undefined);
         const ns = NormalizedSchema.of(errorSchema);
@@ -42953,11 +42953,9 @@ Set AWS_CONTAINER_CREDENTIALS_FULL_URI or AWS_CONTAINER_CREDENTIALS_RELATIVE_URI
     }
     const url = new URL(host);
     checkUrl(url, options.logger);
-    const requestHandler = NodeHttpHandler.create({
-        requestTimeout: options.timeout ?? 1000,
-        connectionTimeout: options.timeout ?? 1000,
-    });
-    return retryWrapper(async () => {
+    const requestHandler = NodeHttpHandler.create({ connectionTimeout: options.timeout ?? 1000 });
+    const requestTimeout = options.timeout ?? 1000;
+    const provider = retryWrapper(async () => {
         const request = createGetRequest(url);
         if (token) {
             request.headers.Authorization = token;
@@ -42966,13 +42964,21 @@ Set AWS_CONTAINER_CREDENTIALS_FULL_URI or AWS_CONTAINER_CREDENTIALS_RELATIVE_URI
             request.headers.Authorization = (await fs$1.readFile(tokenFile)).toString();
         }
         try {
-            const result = await requestHandler.handle(request);
+            const result = await requestHandler.handle(request, { requestTimeout });
             return getCredentials(result.response).then((creds) => setCredentialFeature(creds, "CREDENTIALS_HTTP", "z"));
         }
         catch (e) {
             throw new CredentialsProviderError(String(e), { logger: options.logger });
         }
     }, options.maxRetries ?? 3, options.timeout ?? 1000);
+    return async () => {
+        try {
+            return await provider();
+        }
+        finally {
+            requestHandler.destroy?.();
+        }
+    };
 };
 
 var index$7 = /*#__PURE__*/Object.freeze({
@@ -43979,7 +43985,7 @@ const commonParams$3 = {
     UseDualStack: { type: "builtInParams", name: "useDualstackEndpoint" },
 };
 
-var version = "3.997.9";
+var version = "3.997.12";
 var packageInfo = {
 	version: version};
 
