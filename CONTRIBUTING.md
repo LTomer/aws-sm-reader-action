@@ -302,3 +302,6 @@ rules, ensure CI passes before merging.
   dependency), the risk is low — but still run `npm run all` to confirm.
 - **Breaking changes log**: When a major dependency upgrade requires source
   changes, note it in the PR description so reviewers understand the scope.
+- **Check package version**: use the npm command `npx npm-check-updates` to
+  verify your project is working with the latest versions. use the `-u` switch
+  to update the packages.

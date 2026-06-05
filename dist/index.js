@@ -14,7 +14,7 @@ import 'assert';
 import require$$6 from 'util';
 import require$$0$1 from 'node:assert';
 import require$$0$3 from 'node:net';
-import require$$2, { request as request$3 } from 'node:http';
+import require$$2 from 'node:http';
 import require$$0$2, { Readable, Writable } from 'node:stream';
 import require$$0 from 'node:buffer';
 import require$$0$4, { promisify } from 'node:util';
@@ -26,7 +26,7 @@ import require$$1$2 from 'node:zlib';
 import require$$5$1 from 'node:perf_hooks';
 import require$$8$1 from 'node:util/types';
 import require$$1$1 from 'node:worker_threads';
-import require$$1$3, { parse as parse$1 } from 'node:url';
+import require$$1$3 from 'node:url';
 import require$$5$2 from 'node:async_hooks';
 import require$$1$4 from 'node:console';
 import require$$1$5 from 'node:dns';
@@ -39,7 +39,7 @@ import { ReadStream, lstatSync, fstatSync, promises as promises$1, readFileSync 
 import { homedir, platform, release } from 'node:os';
 import { sep, join, normalize, dirname } from 'node:path';
 import { exec } from 'node:child_process';
-import { Agent, request as request$2 } from 'node:https';
+import node_https from 'node:https';
 import { versions, env } from 'node:process';
 
 // We use any as a valid input type
@@ -28600,11 +28600,168 @@ var IniSectionType;
 
 const getSmithyContext = (context) => context[SMITHY_CONTEXT_KEY] || (context[SMITHY_CONTEXT_KEY] = {});
 
+class HttpRequest {
+    method;
+    protocol;
+    hostname;
+    port;
+    path;
+    query;
+    headers;
+    username;
+    password;
+    fragment;
+    body;
+    constructor(options) {
+        this.method = options.method || "GET";
+        this.hostname = options.hostname || "localhost";
+        this.port = options.port;
+        this.query = options.query || {};
+        this.headers = options.headers || {};
+        this.body = options.body;
+        this.protocol = options.protocol
+            ? options.protocol.slice(-1) !== ":"
+                ? `${options.protocol}:`
+                : options.protocol
+            : "https:";
+        this.path = options.path ? (options.path.charAt(0) !== "/" ? `/${options.path}` : options.path) : "/";
+        this.username = options.username;
+        this.password = options.password;
+        this.fragment = options.fragment;
+    }
+    static clone(request) {
+        const cloned = new HttpRequest({
+            ...request,
+            headers: { ...request.headers },
+        });
+        if (cloned.query) {
+            cloned.query = cloneQuery(cloned.query);
+        }
+        return cloned;
+    }
+    static isInstance(request) {
+        if (!request) {
+            return false;
+        }
+        const req = request;
+        return ("method" in req &&
+            "protocol" in req &&
+            "hostname" in req &&
+            "path" in req &&
+            typeof req["query"] === "object" &&
+            typeof req["headers"] === "object");
+    }
+    clone() {
+        return HttpRequest.clone(this);
+    }
+}
+function cloneQuery(query) {
+    return Object.keys(query).reduce((carry, paramName) => {
+        const param = query[paramName];
+        return {
+            ...carry,
+            [paramName]: Array.isArray(param) ? [...param] : param,
+        };
+    }, {});
+}
+
+class HttpResponse {
+    statusCode;
+    reason;
+    headers;
+    body;
+    constructor(options) {
+        this.statusCode = options.statusCode;
+        this.reason = options.reason;
+        this.headers = options.headers || {};
+        this.body = options.body;
+    }
+    static isInstance(response) {
+        if (!response)
+            return false;
+        const resp = response;
+        return typeof resp.statusCode === "number" && typeof resp.headers === "object";
+    }
+}
+
+const VALID_HOST_LABEL_REGEX = new RegExp(`^(?!.*-$)(?!-)[a-zA-Z0-9-]{1,63}$`);
+const isValidHostLabel = (value, allowSubDomains = false) => {
+    if (!allowSubDomains) {
+        return VALID_HOST_LABEL_REGEX.test(value);
+    }
+    const labels = value.split(".");
+    for (const label of labels) {
+        if (!isValidHostLabel(label)) {
+            return false;
+        }
+    }
+    return true;
+};
+
 const normalizeProvider$1 = (input) => {
     if (typeof input === "function")
         return input;
     const promisified = Promise.resolve(input);
     return () => promisified;
+};
+
+function parseQueryString(querystring) {
+    const query = {};
+    querystring = querystring.replace(/^\?/, "");
+    if (querystring) {
+        for (const pair of querystring.split("&")) {
+            let [key, value = null] = pair.split("=");
+            key = decodeURIComponent(key);
+            if (value) {
+                value = decodeURIComponent(value);
+            }
+            if (!(key in query)) {
+                query[key] = value;
+            }
+            else if (Array.isArray(query[key])) {
+                query[key].push(value);
+            }
+            else {
+                query[key] = [query[key], value];
+            }
+        }
+    }
+    return query;
+}
+
+const parseUrl = (url) => {
+    if (typeof url === "string") {
+        return parseUrl(new URL(url));
+    }
+    const { hostname, pathname, port, protocol, search } = url;
+    let query;
+    if (search) {
+        query = parseQueryString(search);
+    }
+    return {
+        hostname,
+        port: port ? parseInt(port) : undefined,
+        protocol,
+        path: pathname,
+        query,
+    };
+};
+
+const toEndpointV1 = (endpoint) => {
+    if (typeof endpoint === "object") {
+        if ("url" in endpoint) {
+            const v1Endpoint = parseUrl(endpoint.url);
+            if (endpoint.headers) {
+                v1Endpoint.headers = {};
+                for (const name in endpoint.headers) {
+                    v1Endpoint.headers[name.toLowerCase()] = endpoint.headers[name].join(", ");
+                }
+            }
+            return v1Endpoint;
+        }
+        return endpoint;
+    }
+    return parseUrl(endpoint);
 };
 
 class Client {
@@ -28664,6 +28821,887 @@ const deref = (schemaRef) => {
     }
     return schemaRef;
 };
+
+const operation = (namespace, name, traits, input, output) => ({
+    name,
+    namespace,
+    traits,
+    input,
+    output,
+});
+
+const schemaDeserializationMiddleware = (config) => (next, context) => async (args) => {
+    const { response } = await next(args);
+    const { operationSchema } = getSmithyContext(context);
+    const [, ns, n, t, i, o] = operationSchema ?? [];
+    try {
+        const parsed = await config.protocol.deserializeResponse(operation(ns, n, t, i, o), {
+            ...config,
+            ...context,
+        }, response);
+        return {
+            response,
+            output: parsed,
+        };
+    }
+    catch (error) {
+        Object.defineProperty(error, "$response", {
+            value: response,
+            enumerable: false,
+            writable: false,
+            configurable: false,
+        });
+        if (!("$metadata" in error)) {
+            const hint = `Deserialization error: to see the raw response, inspect the hidden field {error}.$response on this object.`;
+            try {
+                error.message += "\n  " + hint;
+            }
+            catch (e) {
+                if (!context.logger || context.logger?.constructor?.name === "NoOpLogger") {
+                    console.warn(hint);
+                }
+                else {
+                    context.logger?.warn?.(hint);
+                }
+            }
+            if (typeof error.$responseBodyText !== "undefined") {
+                if (error.$response) {
+                    error.$response.body = error.$responseBodyText;
+                }
+            }
+            try {
+                if (HttpResponse.isInstance(response)) {
+                    const { headers = {}, statusCode } = response;
+                    const headerEntries = Object.entries(headers);
+                    error.$metadata = {
+                        httpStatusCode: statusCode,
+                        requestId: findHeader(/^x-[\w-]+-request-?id$/, headerEntries),
+                        extendedRequestId: findHeader(/^x-[\w-]+-id-2$/, headerEntries),
+                        cfId: findHeader(/^x-[\w-]+-cf-id$/, headerEntries),
+                    };
+                }
+            }
+            catch (e) {
+            }
+        }
+        throw error;
+    }
+};
+const findHeader = (pattern, headers) => {
+    return (headers.find(([k]) => {
+        return k.match(pattern);
+    }) || [void 0, void 0])[1];
+};
+
+const schemaSerializationMiddleware = (config) => (next, context) => async (args) => {
+    const { operationSchema } = getSmithyContext(context);
+    const [, ns, n, t, i, o] = operationSchema ?? [];
+    const endpoint = context.endpointV2
+        ? async () => toEndpointV1(context.endpointV2)
+        : config.endpoint;
+    const request = await config.protocol.serializeRequest(operation(ns, n, t, i, o), args.input, {
+        ...config,
+        ...context,
+        endpoint,
+    });
+    return next({
+        ...args,
+        request,
+    });
+};
+
+const deserializerMiddlewareOption = {
+    name: "deserializerMiddleware",
+    step: "deserialize",
+    tags: ["DESERIALIZER"],
+    override: true,
+};
+const serializerMiddlewareOption$1 = {
+    name: "serializerMiddleware",
+    step: "serialize",
+    tags: ["SERIALIZER"],
+    override: true,
+};
+function getSchemaSerdePlugin(config) {
+    return {
+        applyToStack: (commandStack) => {
+            commandStack.add(schemaSerializationMiddleware(config), serializerMiddlewareOption$1);
+            commandStack.add(schemaDeserializationMiddleware(config), deserializerMiddlewareOption);
+            config.protocol.setSerdeContext(config);
+        },
+    };
+}
+
+const traitsCache = [];
+function translateTraits(indicator) {
+    if (typeof indicator === "object") {
+        return indicator;
+    }
+    indicator = indicator | 0;
+    if (traitsCache[indicator]) {
+        return traitsCache[indicator];
+    }
+    const traits = {};
+    let i = 0;
+    for (const trait of [
+        "httpLabel",
+        "idempotent",
+        "idempotencyToken",
+        "sensitive",
+        "httpPayload",
+        "httpResponseCode",
+        "httpQueryParams",
+    ]) {
+        if (((indicator >> i++) & 1) === 1) {
+            traits[trait] = 1;
+        }
+    }
+    return (traitsCache[indicator] = traits);
+}
+
+const anno = {
+    it: Symbol.for("@smithy/nor-struct-it"),
+    ns: Symbol.for("@smithy/ns"),
+};
+const simpleSchemaCacheN = [];
+const simpleSchemaCacheS = {};
+class NormalizedSchema {
+    ref;
+    memberName;
+    static symbol = Symbol.for("@smithy/nor");
+    symbol = NormalizedSchema.symbol;
+    name;
+    schema;
+    _isMemberSchema;
+    traits;
+    memberTraits;
+    normalizedTraits;
+    constructor(ref, memberName) {
+        this.ref = ref;
+        this.memberName = memberName;
+        const traitStack = [];
+        let _ref = ref;
+        let schema = ref;
+        this._isMemberSchema = false;
+        while (isMemberSchema(_ref)) {
+            traitStack.push(_ref[1]);
+            _ref = _ref[0];
+            schema = deref(_ref);
+            this._isMemberSchema = true;
+        }
+        if (traitStack.length > 0) {
+            this.memberTraits = {};
+            for (let i = traitStack.length - 1; i >= 0; --i) {
+                const traitSet = traitStack[i];
+                Object.assign(this.memberTraits, translateTraits(traitSet));
+            }
+        }
+        else {
+            this.memberTraits = 0;
+        }
+        if (schema instanceof NormalizedSchema) {
+            const computedMemberTraits = this.memberTraits;
+            Object.assign(this, schema);
+            this.memberTraits = Object.assign({}, computedMemberTraits, schema.getMemberTraits(), this.getMemberTraits());
+            this.normalizedTraits = void 0;
+            this.memberName = memberName ?? schema.memberName;
+            return;
+        }
+        this.schema = deref(schema);
+        if (isStaticSchema(this.schema)) {
+            this.name = `${this.schema[1]}#${this.schema[2]}`;
+            this.traits = this.schema[3];
+        }
+        else {
+            this.name = this.memberName ?? String(schema);
+            this.traits = 0;
+        }
+        if (this._isMemberSchema && !memberName) {
+            throw new Error(`@smithy/core/schema - NormalizedSchema member init ${this.getName(true)} missing member name.`);
+        }
+    }
+    static [Symbol.hasInstance](lhs) {
+        const isPrototype = this.prototype.isPrototypeOf(lhs);
+        if (!isPrototype && typeof lhs === "object" && lhs !== null) {
+            const ns = lhs;
+            return ns.symbol === this.symbol;
+        }
+        return isPrototype;
+    }
+    static of(ref) {
+        const keyAble = typeof ref === "function" || (typeof ref === "object" && ref !== null);
+        if (typeof ref === "number") {
+            if (simpleSchemaCacheN[ref]) {
+                return simpleSchemaCacheN[ref];
+            }
+        }
+        else if (typeof ref === "string") {
+            if (simpleSchemaCacheS[ref]) {
+                return simpleSchemaCacheS[ref];
+            }
+        }
+        else if (keyAble) {
+            if (ref[anno.ns]) {
+                return ref[anno.ns];
+            }
+        }
+        const sc = deref(ref);
+        if (sc instanceof NormalizedSchema) {
+            return sc;
+        }
+        if (isMemberSchema(sc)) {
+            const [ns, traits] = sc;
+            if (ns instanceof NormalizedSchema) {
+                Object.assign(ns.getMergedTraits(), translateTraits(traits));
+                return ns;
+            }
+            throw new Error(`@smithy/core/schema - may not init unwrapped member schema=${JSON.stringify(ref, null, 2)}.`);
+        }
+        const ns = new NormalizedSchema(sc);
+        if (keyAble) {
+            return (ref[anno.ns] = ns);
+        }
+        if (typeof sc === "string") {
+            return (simpleSchemaCacheS[sc] = ns);
+        }
+        if (typeof sc === "number") {
+            return (simpleSchemaCacheN[sc] = ns);
+        }
+        return ns;
+    }
+    getSchema() {
+        const sc = this.schema;
+        if (Array.isArray(sc) && sc[0] === 0) {
+            return sc[4];
+        }
+        return sc;
+    }
+    getName(withNamespace = false) {
+        const { name } = this;
+        const short = !withNamespace && name && name.includes("#");
+        return short ? name.split("#")[1] : name || undefined;
+    }
+    getMemberName() {
+        return this.memberName;
+    }
+    isMemberSchema() {
+        return this._isMemberSchema;
+    }
+    isListSchema() {
+        const sc = this.getSchema();
+        return typeof sc === "number"
+            ? sc >= 64 && sc < 128
+            : sc[0] === 1;
+    }
+    isMapSchema() {
+        const sc = this.getSchema();
+        return typeof sc === "number"
+            ? sc >= 128 && sc <= 0b1111_1111
+            : sc[0] === 2;
+    }
+    isStructSchema() {
+        const sc = this.getSchema();
+        if (typeof sc !== "object") {
+            return false;
+        }
+        const id = sc[0];
+        return (id === 3 ||
+            id === -3 ||
+            id === 4);
+    }
+    isUnionSchema() {
+        const sc = this.getSchema();
+        if (typeof sc !== "object") {
+            return false;
+        }
+        return sc[0] === 4;
+    }
+    isBlobSchema() {
+        const sc = this.getSchema();
+        return sc === 21 || sc === 42;
+    }
+    isTimestampSchema() {
+        const sc = this.getSchema();
+        return (typeof sc === "number" &&
+            sc >= 4 &&
+            sc <= 7);
+    }
+    isUnitSchema() {
+        return this.getSchema() === "unit";
+    }
+    isDocumentSchema() {
+        return this.getSchema() === 15;
+    }
+    isStringSchema() {
+        return this.getSchema() === 0;
+    }
+    isBooleanSchema() {
+        return this.getSchema() === 2;
+    }
+    isNumericSchema() {
+        return this.getSchema() === 1;
+    }
+    isBigIntegerSchema() {
+        return this.getSchema() === 17;
+    }
+    isBigDecimalSchema() {
+        return this.getSchema() === 19;
+    }
+    isStreaming() {
+        const { streaming } = this.getMergedTraits();
+        return !!streaming || this.getSchema() === 42;
+    }
+    isIdempotencyToken() {
+        return !!this.getMergedTraits().idempotencyToken;
+    }
+    getMergedTraits() {
+        return (this.normalizedTraits ??
+            (this.normalizedTraits = {
+                ...this.getOwnTraits(),
+                ...this.getMemberTraits(),
+            }));
+    }
+    getMemberTraits() {
+        return translateTraits(this.memberTraits);
+    }
+    getOwnTraits() {
+        return translateTraits(this.traits);
+    }
+    getKeySchema() {
+        const [isDoc, isMap] = [this.isDocumentSchema(), this.isMapSchema()];
+        if (!isDoc && !isMap) {
+            throw new Error(`@smithy/core/schema - cannot get key for non-map: ${this.getName(true)}`);
+        }
+        const schema = this.getSchema();
+        const memberSchema = isDoc
+            ? 15
+            : schema[4] ?? 0;
+        return member([memberSchema, 0], "key");
+    }
+    getValueSchema() {
+        const sc = this.getSchema();
+        const [isDoc, isMap, isList] = [this.isDocumentSchema(), this.isMapSchema(), this.isListSchema()];
+        const memberSchema = typeof sc === "number"
+            ? 0b0011_1111 & sc
+            : sc && typeof sc === "object" && (isMap || isList)
+                ? sc[3 + sc[0]]
+                : isDoc
+                    ? 15
+                    : void 0;
+        if (memberSchema != null) {
+            return member([memberSchema, 0], isMap ? "value" : "member");
+        }
+        throw new Error(`@smithy/core/schema - ${this.getName(true)} has no value member.`);
+    }
+    getMemberSchema(memberName) {
+        const struct = this.getSchema();
+        if (this.isStructSchema() && struct[4].includes(memberName)) {
+            const i = struct[4].indexOf(memberName);
+            const memberSchema = struct[5][i];
+            return member(isMemberSchema(memberSchema) ? memberSchema : [memberSchema, 0], memberName);
+        }
+        if (this.isDocumentSchema()) {
+            return member([15, 0], memberName);
+        }
+        throw new Error(`@smithy/core/schema - ${this.getName(true)} has no member=${memberName}.`);
+    }
+    getMemberSchemas() {
+        const buffer = {};
+        try {
+            for (const [k, v] of this.structIterator()) {
+                buffer[k] = v;
+            }
+        }
+        catch (ignored) { }
+        return buffer;
+    }
+    getEventStreamMember() {
+        if (this.isStructSchema()) {
+            for (const [memberName, memberSchema] of this.structIterator()) {
+                if (memberSchema.isStreaming() && memberSchema.isStructSchema()) {
+                    return memberName;
+                }
+            }
+        }
+        return "";
+    }
+    *structIterator() {
+        if (this.isUnitSchema()) {
+            return;
+        }
+        if (!this.isStructSchema()) {
+            throw new Error("@smithy/core/schema - cannot iterate non-struct schema.");
+        }
+        const struct = this.getSchema();
+        const z = struct[4].length;
+        let it = struct[anno.it];
+        if (it && z === it.length) {
+            yield* it;
+            return;
+        }
+        it = Array(z);
+        for (let i = 0; i < z; ++i) {
+            const k = struct[4][i];
+            const v = member([struct[5][i], 0], k);
+            yield (it[i] = [k, v]);
+        }
+        struct[anno.it] = it;
+    }
+}
+function member(memberSchema, memberName) {
+    if (memberSchema instanceof NormalizedSchema) {
+        return Object.assign(memberSchema, {
+            memberName,
+            _isMemberSchema: true,
+        });
+    }
+    const internalCtorAccess = NormalizedSchema;
+    return new internalCtorAccess(memberSchema, memberName);
+}
+const isMemberSchema = (sc) => Array.isArray(sc) && sc.length === 2;
+const isStaticSchema = (sc) => Array.isArray(sc) && sc.length >= 5;
+
+class TypeRegistry {
+    namespace;
+    schemas;
+    exceptions;
+    static registries = new Map();
+    constructor(namespace, schemas = new Map(), exceptions = new Map()) {
+        this.namespace = namespace;
+        this.schemas = schemas;
+        this.exceptions = exceptions;
+    }
+    static for(namespace) {
+        if (!TypeRegistry.registries.has(namespace)) {
+            TypeRegistry.registries.set(namespace, new TypeRegistry(namespace));
+        }
+        return TypeRegistry.registries.get(namespace);
+    }
+    copyFrom(other) {
+        const { schemas, exceptions } = this;
+        for (const [k, v] of other.schemas) {
+            if (!schemas.has(k)) {
+                schemas.set(k, v);
+            }
+        }
+        for (const [k, v] of other.exceptions) {
+            if (!exceptions.has(k)) {
+                exceptions.set(k, v);
+            }
+        }
+    }
+    register(shapeId, schema) {
+        const qualifiedName = this.normalizeShapeId(shapeId);
+        for (const r of [this, TypeRegistry.for(qualifiedName.split("#")[0])]) {
+            r.schemas.set(qualifiedName, schema);
+        }
+    }
+    getSchema(shapeId) {
+        const id = this.normalizeShapeId(shapeId);
+        if (!this.schemas.has(id)) {
+            if (!shapeId.includes("#")) {
+                const suffix = "#" + shapeId;
+                const candidates = [];
+                for (const [shapeId, schema] of this.schemas.entries()) {
+                    if (shapeId.endsWith(suffix)) {
+                        candidates.push(schema);
+                    }
+                }
+                if (candidates.length === 1) {
+                    return candidates[0];
+                }
+            }
+            throw new Error(`@smithy/core/schema - schema not found for ${id}`);
+        }
+        return this.schemas.get(id);
+    }
+    registerError(es, ctor) {
+        const $error = es;
+        const ns = $error[1];
+        for (const r of [this, TypeRegistry.for(ns)]) {
+            r.schemas.set(ns + "#" + $error[2], $error);
+            r.exceptions.set($error, ctor);
+        }
+    }
+    getErrorCtor(es) {
+        const $error = es;
+        if (this.exceptions.has($error)) {
+            return this.exceptions.get($error);
+        }
+        const registry = TypeRegistry.for($error[1]);
+        return registry.exceptions.get($error);
+    }
+    getBaseException() {
+        for (const exceptionKey of this.exceptions.keys()) {
+            if (Array.isArray(exceptionKey)) {
+                const [, ns, name] = exceptionKey;
+                const id = ns + "#" + name;
+                if (id.startsWith("smithy.ts.sdk.synthetic.") && id.endsWith("ServiceException")) {
+                    return exceptionKey;
+                }
+            }
+        }
+        return undefined;
+    }
+    find(predicate) {
+        for (const schema of this.schemas.values()) {
+            if (predicate(schema)) {
+                return schema;
+            }
+        }
+        return undefined;
+    }
+    clear() {
+        this.schemas.clear();
+        this.exceptions.clear();
+    }
+    normalizeShapeId(shapeId) {
+        if (shapeId.includes("#")) {
+            return shapeId;
+        }
+        return this.namespace + "#" + shapeId;
+    }
+}
+
+const SENSITIVE_STRING = "***SensitiveInformation***";
+function schemaLogFilter(schema, data) {
+    if (data == null) {
+        return data;
+    }
+    const ns = NormalizedSchema.of(schema);
+    if (ns.getMergedTraits().sensitive) {
+        return SENSITIVE_STRING;
+    }
+    if (ns.isListSchema()) {
+        const isSensitive = !!ns.getValueSchema().getMergedTraits().sensitive;
+        if (isSensitive) {
+            return SENSITIVE_STRING;
+        }
+    }
+    else if (ns.isMapSchema()) {
+        const isSensitive = !!ns.getKeySchema().getMergedTraits().sensitive || !!ns.getValueSchema().getMergedTraits().sensitive;
+        if (isSensitive) {
+            return SENSITIVE_STRING;
+        }
+    }
+    else if (ns.isStructSchema() && typeof data === "object") {
+        const object = data;
+        const newObject = {};
+        for (const [member, memberNs] of ns.structIterator()) {
+            if (object[member] != null) {
+                newObject[member] = schemaLogFilter(memberNs, object[member]);
+            }
+        }
+        return newObject;
+    }
+    return data;
+}
+
+class Command {
+    middlewareStack = constructStack();
+    schema;
+    static classBuilder() {
+        return new ClassBuilder();
+    }
+    resolveMiddlewareWithContext(clientStack, configuration, options, { middlewareFn, clientName, commandName, inputFilterSensitiveLog, outputFilterSensitiveLog, smithyContext, additionalContext, CommandCtor, }) {
+        for (const mw of middlewareFn.bind(this)(CommandCtor, clientStack, configuration, options)) {
+            this.middlewareStack.use(mw);
+        }
+        const stack = clientStack.concat(this.middlewareStack);
+        const { logger } = configuration;
+        const handlerExecutionContext = {
+            logger,
+            clientName,
+            commandName,
+            inputFilterSensitiveLog,
+            outputFilterSensitiveLog,
+            [SMITHY_CONTEXT_KEY]: {
+                commandInstance: this,
+                ...smithyContext,
+            },
+            ...additionalContext,
+        };
+        const { requestHandler } = configuration;
+        let requestOptions = options ?? {};
+        if (smithyContext.eventStream) {
+            requestOptions = {
+                isEventStream: true,
+                ...requestOptions,
+            };
+        }
+        return stack.resolve((request) => requestHandler.handle(request.request, requestOptions), handlerExecutionContext);
+    }
+}
+class ClassBuilder {
+    _init = () => { };
+    _ep = {};
+    _middlewareFn = () => [];
+    _commandName = "";
+    _clientName = "";
+    _additionalContext = {};
+    _smithyContext = {};
+    _inputFilterSensitiveLog = undefined;
+    _outputFilterSensitiveLog = undefined;
+    _serializer = null;
+    _deserializer = null;
+    _operationSchema;
+    init(cb) {
+        this._init = cb;
+    }
+    ep(endpointParameterInstructions) {
+        this._ep = endpointParameterInstructions;
+        return this;
+    }
+    m(middlewareSupplier) {
+        this._middlewareFn = middlewareSupplier;
+        return this;
+    }
+    s(service, operation, smithyContext = {}) {
+        this._smithyContext = {
+            service,
+            operation,
+            ...smithyContext,
+        };
+        return this;
+    }
+    c(additionalContext = {}) {
+        this._additionalContext = additionalContext;
+        return this;
+    }
+    n(clientName, commandName) {
+        this._clientName = clientName;
+        this._commandName = commandName;
+        return this;
+    }
+    f(inputFilter = (_) => _, outputFilter = (_) => _) {
+        this._inputFilterSensitiveLog = inputFilter;
+        this._outputFilterSensitiveLog = outputFilter;
+        return this;
+    }
+    ser(serializer) {
+        this._serializer = serializer;
+        return this;
+    }
+    de(deserializer) {
+        this._deserializer = deserializer;
+        return this;
+    }
+    sc(operation) {
+        this._operationSchema = operation;
+        this._smithyContext.operationSchema = operation;
+        return this;
+    }
+    build() {
+        const closure = this;
+        let CommandRef;
+        return (CommandRef = class extends Command {
+            input;
+            static getEndpointParameterInstructions() {
+                return closure._ep;
+            }
+            constructor(...[input]) {
+                super();
+                this.input = input ?? {};
+                closure._init(this);
+                this.schema = closure._operationSchema;
+            }
+            resolveMiddleware(stack, configuration, options) {
+                const op = closure._operationSchema;
+                const input = op?.[4] ?? op?.input;
+                const output = op?.[5] ?? op?.output;
+                return this.resolveMiddlewareWithContext(stack, configuration, options, {
+                    CommandCtor: CommandRef,
+                    middlewareFn: closure._middlewareFn,
+                    clientName: closure._clientName,
+                    commandName: closure._commandName,
+                    inputFilterSensitiveLog: closure._inputFilterSensitiveLog ?? (op ? schemaLogFilter.bind(null, input) : (_) => _),
+                    outputFilterSensitiveLog: closure._outputFilterSensitiveLog ?? (op ? schemaLogFilter.bind(null, output) : (_) => _),
+                    smithyContext: closure._smithyContext,
+                    additionalContext: closure._additionalContext,
+                });
+            }
+            serialize = closure._serializer;
+            deserialize = closure._deserializer;
+        });
+    }
+}
+
+class ServiceException extends Error {
+    $fault;
+    $response;
+    $retryable;
+    $metadata;
+    constructor(options) {
+        super(options.message);
+        Object.setPrototypeOf(this, Object.getPrototypeOf(this).constructor.prototype);
+        this.name = options.name;
+        this.$fault = options.$fault;
+        this.$metadata = options.$metadata;
+    }
+    static isInstance(value) {
+        if (!value)
+            return false;
+        const candidate = value;
+        return (ServiceException.prototype.isPrototypeOf(candidate) ||
+            (Boolean(candidate.$fault) &&
+                Boolean(candidate.$metadata) &&
+                (candidate.$fault === "client" || candidate.$fault === "server")));
+    }
+    static [Symbol.hasInstance](instance) {
+        if (!instance)
+            return false;
+        const candidate = instance;
+        if (this === ServiceException) {
+            return ServiceException.isInstance(instance);
+        }
+        if (ServiceException.isInstance(instance)) {
+            if (candidate.name && this.name) {
+                return this.prototype.isPrototypeOf(instance) || candidate.name === this.name;
+            }
+            return this.prototype.isPrototypeOf(instance);
+        }
+        return false;
+    }
+}
+const decorateServiceException = (exception, additions = {}) => {
+    Object.entries(additions)
+        .filter(([, v]) => v !== undefined)
+        .forEach(([k, v]) => {
+        if (exception[k] == undefined || exception[k] === "") {
+            exception[k] = v;
+        }
+    });
+    const message = exception.message || exception.Message || "UnknownError";
+    exception.message = message;
+    delete exception.Message;
+    return exception;
+};
+
+const loadConfigsForDefaultMode = (mode) => {
+    switch (mode) {
+        case "standard":
+            return {
+                retryMode: "standard",
+                connectionTimeout: 3100,
+            };
+        case "in-region":
+            return {
+                retryMode: "standard",
+                connectionTimeout: 1100,
+            };
+        case "cross-region":
+            return {
+                retryMode: "standard",
+                connectionTimeout: 3100,
+            };
+        case "mobile":
+            return {
+                retryMode: "standard",
+                connectionTimeout: 30000,
+            };
+        default:
+            return {};
+    }
+};
+
+let warningEmitted = false;
+const emitWarningIfUnsupportedVersion = (version) => {
+    if (version && !warningEmitted && parseInt(version.substring(1, version.indexOf("."))) < 16) {
+        warningEmitted = true;
+    }
+};
+
+const knownAlgorithms = Object.values(AlgorithmId);
+const getChecksumConfiguration = (runtimeConfig) => {
+    const checksumAlgorithms = [];
+    for (const id in AlgorithmId) {
+        const algorithmId = AlgorithmId[id];
+        if (runtimeConfig[algorithmId] === undefined) {
+            continue;
+        }
+        checksumAlgorithms.push({
+            algorithmId: () => algorithmId,
+            checksumConstructor: () => runtimeConfig[algorithmId],
+        });
+    }
+    for (const [id, ChecksumCtor] of Object.entries(runtimeConfig.checksumAlgorithms ?? {})) {
+        checksumAlgorithms.push({
+            algorithmId: () => id,
+            checksumConstructor: () => ChecksumCtor,
+        });
+    }
+    return {
+        addChecksumAlgorithm(algo) {
+            runtimeConfig.checksumAlgorithms = runtimeConfig.checksumAlgorithms ?? {};
+            const id = algo.algorithmId();
+            const ctor = algo.checksumConstructor();
+            if (knownAlgorithms.includes(id)) {
+                runtimeConfig.checksumAlgorithms[id.toUpperCase()] = ctor;
+            }
+            else {
+                runtimeConfig.checksumAlgorithms[id] = ctor;
+            }
+            checksumAlgorithms.push(algo);
+        },
+        checksumAlgorithms() {
+            return checksumAlgorithms;
+        },
+    };
+};
+const resolveChecksumRuntimeConfig = (clientConfig) => {
+    const runtimeConfig = {};
+    clientConfig.checksumAlgorithms().forEach((checksumAlgorithm) => {
+        const id = checksumAlgorithm.algorithmId();
+        if (knownAlgorithms.includes(id)) {
+            runtimeConfig[id] = checksumAlgorithm.checksumConstructor();
+        }
+    });
+    return runtimeConfig;
+};
+
+const getRetryConfiguration = (runtimeConfig) => {
+    return {
+        setRetryStrategy(retryStrategy) {
+            runtimeConfig.retryStrategy = retryStrategy;
+        },
+        retryStrategy() {
+            return runtimeConfig.retryStrategy;
+        },
+    };
+};
+const resolveRetryRuntimeConfig = (retryStrategyConfiguration) => {
+    const runtimeConfig = {};
+    runtimeConfig.retryStrategy = retryStrategyConfiguration.retryStrategy();
+    return runtimeConfig;
+};
+
+const getDefaultExtensionConfiguration = (runtimeConfig) => {
+    return Object.assign(getChecksumConfiguration(runtimeConfig), getRetryConfiguration(runtimeConfig));
+};
+const resolveDefaultRuntimeConfig = (config) => {
+    return Object.assign(resolveChecksumRuntimeConfig(config), resolveRetryRuntimeConfig(config));
+};
+
+const getValueFromTextNode = (obj) => {
+    const textNodeName = "#text";
+    for (const key in obj) {
+        if (obj.hasOwnProperty(key) && obj[key][textNodeName] !== undefined) {
+            obj[key] = obj[key][textNodeName];
+        }
+        else if (typeof obj[key] === "object" && obj[key] !== null) {
+            obj[key] = getValueFromTextNode(obj[key]);
+        }
+    }
+    return obj;
+};
+
+class NoOpLogger {
+    trace() { }
+    debug() { }
+    info() { }
+    warn() { }
+    error() { }
+}
 
 const isArrayBuffer = (arg) => (typeof ArrayBuffer === "function" && arg instanceof ArrayBuffer) ||
     Object.prototype.toString.call(arg) === "[object ArrayBuffer]";
@@ -30035,23 +31073,6 @@ const createConfigValueProvider = (configKey, canonicalEndpointParamKey, config,
     return configProvider;
 };
 
-const toEndpointV1 = (endpoint) => {
-    if (typeof endpoint === "object") {
-        if ("url" in endpoint) {
-            const v1Endpoint = parseUrl(endpoint.url);
-            if (endpoint.headers) {
-                v1Endpoint.headers = {};
-                for (const name in endpoint.headers) {
-                    v1Endpoint.headers[name.toLowerCase()] = endpoint.headers[name].join(", ");
-                }
-            }
-            return v1Endpoint;
-        }
-        return endpoint;
-    }
-    return parseUrl(endpoint);
-};
-
 function bindGetEndpointFromInstructions(getEndpointFromConfig) {
     return async (commandInput, instructionsSupplier, clientConfig, context) => {
         if (!clientConfig.isCustomEndpoint) {
@@ -30161,7 +31182,7 @@ function bindEndpointMiddleware(getEndpointFromConfig) {
     };
 }
 
-const serializerMiddlewareOption$1 = {
+const serializerMiddlewareOption = {
     name: "serializerMiddleware"};
 const endpointMiddlewareOptions = {
     step: "serialize",
@@ -30169,7 +31190,7 @@ const endpointMiddlewareOptions = {
     name: "endpointV2Middleware",
     override: true,
     relation: "before",
-    toMiddleware: serializerMiddlewareOption$1.name,
+    toMiddleware: serializerMiddlewareOption.name,
 };
 function bindGetEndpointPlugin(getEndpointFromConfig) {
     const endpointMiddleware = bindEndpointMiddleware(getEndpointFromConfig);
@@ -30346,20 +31367,6 @@ const getAttr = (value, path) => getAttrPathList(path).reduce((acc, index) => {
 }, value);
 
 const isSet = (value) => value != null;
-
-const VALID_HOST_LABEL_REGEX = new RegExp(`^(?!.*-$)(?!-)[a-zA-Z0-9-]{1,63}$`);
-const isValidHostLabel = (value, allowSubDomains = false) => {
-    if (!allowSubDomains) {
-        return VALID_HOST_LABEL_REGEX.test(value);
-    }
-    const labels = value.split(".");
-    for (const label of labels) {
-        if (!isValidHostLabel(label)) {
-            return false;
-        }
-    }
-    return true;
-};
 
 function ite(condition, trueValue, falseValue) {
     return condition ? trueValue : falseValue;
@@ -31012,90 +32019,6 @@ class SerdeContext {
     serdeContext;
     setSerdeContext(serdeContext) {
         this.serdeContext = serdeContext;
-    }
-}
-
-class HttpRequest {
-    method;
-    protocol;
-    hostname;
-    port;
-    path;
-    query;
-    headers;
-    username;
-    password;
-    fragment;
-    body;
-    constructor(options) {
-        this.method = options.method || "GET";
-        this.hostname = options.hostname || "localhost";
-        this.port = options.port;
-        this.query = options.query || {};
-        this.headers = options.headers || {};
-        this.body = options.body;
-        this.protocol = options.protocol
-            ? options.protocol.slice(-1) !== ":"
-                ? `${options.protocol}:`
-                : options.protocol
-            : "https:";
-        this.path = options.path ? (options.path.charAt(0) !== "/" ? `/${options.path}` : options.path) : "/";
-        this.username = options.username;
-        this.password = options.password;
-        this.fragment = options.fragment;
-    }
-    static clone(request) {
-        const cloned = new HttpRequest({
-            ...request,
-            headers: { ...request.headers },
-        });
-        if (cloned.query) {
-            cloned.query = cloneQuery(cloned.query);
-        }
-        return cloned;
-    }
-    static isInstance(request) {
-        if (!request) {
-            return false;
-        }
-        const req = request;
-        return ("method" in req &&
-            "protocol" in req &&
-            "hostname" in req &&
-            "path" in req &&
-            typeof req["query"] === "object" &&
-            typeof req["headers"] === "object");
-    }
-    clone() {
-        return HttpRequest.clone(this);
-    }
-}
-function cloneQuery(query) {
-    return Object.keys(query).reduce((carry, paramName) => {
-        const param = query[paramName];
-        return {
-            ...carry,
-            [paramName]: Array.isArray(param) ? [...param] : param,
-        };
-    }, {});
-}
-
-class HttpResponse {
-    statusCode;
-    reason;
-    headers;
-    body;
-    constructor(options) {
-        this.statusCode = options.statusCode;
-        this.reason = options.reason;
-        this.headers = options.headers || {};
-        this.body = options.body;
-    }
-    static isInstance(response) {
-        if (!response)
-            return false;
-        const resp = response;
-        return typeof resp.statusCode === "number" && typeof resp.headers === "object";
     }
 }
 
@@ -31932,929 +32855,6 @@ function buildQueryString(query) {
     return parts.join("&");
 }
 
-function parseQueryString(querystring) {
-    const query = {};
-    querystring = querystring.replace(/^\?/, "");
-    if (querystring) {
-        for (const pair of querystring.split("&")) {
-            let [key, value = null] = pair.split("=");
-            key = decodeURIComponent(key);
-            if (value) {
-                value = decodeURIComponent(value);
-            }
-            if (!(key in query)) {
-                query[key] = value;
-            }
-            else if (Array.isArray(query[key])) {
-                query[key].push(value);
-            }
-            else {
-                query[key] = [query[key], value];
-            }
-        }
-    }
-    return query;
-}
-
-const parseUrl = (url) => {
-    if (typeof url === "string") {
-        return parseUrl(new URL(url));
-    }
-    const { hostname, pathname, port, protocol, search } = url;
-    let query;
-    if (search) {
-        query = parseQueryString(search);
-    }
-    return {
-        hostname,
-        port: port ? parseInt(port) : undefined,
-        protocol,
-        path: pathname,
-        query,
-    };
-};
-
-const operation = (namespace, name, traits, input, output) => ({
-    name,
-    namespace,
-    traits,
-    input,
-    output,
-});
-
-const schemaDeserializationMiddleware = (config) => (next, context) => async (args) => {
-    const { response } = await next(args);
-    const { operationSchema } = getSmithyContext(context);
-    const [, ns, n, t, i, o] = operationSchema ?? [];
-    try {
-        const parsed = await config.protocol.deserializeResponse(operation(ns, n, t, i, o), {
-            ...config,
-            ...context,
-        }, response);
-        return {
-            response,
-            output: parsed,
-        };
-    }
-    catch (error) {
-        Object.defineProperty(error, "$response", {
-            value: response,
-            enumerable: false,
-            writable: false,
-            configurable: false,
-        });
-        if (!("$metadata" in error)) {
-            const hint = `Deserialization error: to see the raw response, inspect the hidden field {error}.$response on this object.`;
-            try {
-                error.message += "\n  " + hint;
-            }
-            catch (e) {
-                if (!context.logger || context.logger?.constructor?.name === "NoOpLogger") {
-                    console.warn(hint);
-                }
-                else {
-                    context.logger?.warn?.(hint);
-                }
-            }
-            if (typeof error.$responseBodyText !== "undefined") {
-                if (error.$response) {
-                    error.$response.body = error.$responseBodyText;
-                }
-            }
-            try {
-                if (HttpResponse.isInstance(response)) {
-                    const { headers = {} } = response;
-                    const headerEntries = Object.entries(headers);
-                    error.$metadata = {
-                        httpStatusCode: response.statusCode,
-                        requestId: findHeader(/^x-[\w-]+-request-?id$/, headerEntries),
-                        extendedRequestId: findHeader(/^x-[\w-]+-id-2$/, headerEntries),
-                        cfId: findHeader(/^x-[\w-]+-cf-id$/, headerEntries),
-                    };
-                }
-            }
-            catch (e) {
-            }
-        }
-        throw error;
-    }
-};
-const findHeader = (pattern, headers) => {
-    return (headers.find(([k]) => {
-        return k.match(pattern);
-    }) || [void 0, void 0])[1];
-};
-
-const schemaSerializationMiddleware = (config) => (next, context) => async (args) => {
-    const { operationSchema } = getSmithyContext(context);
-    const [, ns, n, t, i, o] = operationSchema ?? [];
-    const endpoint = context.endpointV2
-        ? async () => toEndpointV1(context.endpointV2)
-        : config.endpoint;
-    const request = await config.protocol.serializeRequest(operation(ns, n, t, i, o), args.input, {
-        ...config,
-        ...context,
-        endpoint,
-    });
-    return next({
-        ...args,
-        request,
-    });
-};
-
-const deserializerMiddlewareOption = {
-    name: "deserializerMiddleware",
-    step: "deserialize",
-    tags: ["DESERIALIZER"],
-    override: true,
-};
-const serializerMiddlewareOption = {
-    name: "serializerMiddleware",
-    step: "serialize",
-    tags: ["SERIALIZER"],
-    override: true,
-};
-function getSchemaSerdePlugin(config) {
-    return {
-        applyToStack: (commandStack) => {
-            commandStack.add(schemaSerializationMiddleware(config), serializerMiddlewareOption);
-            commandStack.add(schemaDeserializationMiddleware(config), deserializerMiddlewareOption);
-            config.protocol.setSerdeContext(config);
-        },
-    };
-}
-
-const traitsCache = [];
-function translateTraits(indicator) {
-    if (typeof indicator === "object") {
-        return indicator;
-    }
-    indicator = indicator | 0;
-    if (traitsCache[indicator]) {
-        return traitsCache[indicator];
-    }
-    const traits = {};
-    let i = 0;
-    for (const trait of [
-        "httpLabel",
-        "idempotent",
-        "idempotencyToken",
-        "sensitive",
-        "httpPayload",
-        "httpResponseCode",
-        "httpQueryParams",
-    ]) {
-        if (((indicator >> i++) & 1) === 1) {
-            traits[trait] = 1;
-        }
-    }
-    return (traitsCache[indicator] = traits);
-}
-
-const anno = {
-    it: Symbol.for("@smithy/nor-struct-it"),
-    ns: Symbol.for("@smithy/ns"),
-};
-const simpleSchemaCacheN = [];
-const simpleSchemaCacheS = {};
-class NormalizedSchema {
-    ref;
-    memberName;
-    static symbol = Symbol.for("@smithy/nor");
-    symbol = NormalizedSchema.symbol;
-    name;
-    schema;
-    _isMemberSchema;
-    traits;
-    memberTraits;
-    normalizedTraits;
-    constructor(ref, memberName) {
-        this.ref = ref;
-        this.memberName = memberName;
-        const traitStack = [];
-        let _ref = ref;
-        let schema = ref;
-        this._isMemberSchema = false;
-        while (isMemberSchema(_ref)) {
-            traitStack.push(_ref[1]);
-            _ref = _ref[0];
-            schema = deref(_ref);
-            this._isMemberSchema = true;
-        }
-        if (traitStack.length > 0) {
-            this.memberTraits = {};
-            for (let i = traitStack.length - 1; i >= 0; --i) {
-                const traitSet = traitStack[i];
-                Object.assign(this.memberTraits, translateTraits(traitSet));
-            }
-        }
-        else {
-            this.memberTraits = 0;
-        }
-        if (schema instanceof NormalizedSchema) {
-            const computedMemberTraits = this.memberTraits;
-            Object.assign(this, schema);
-            this.memberTraits = Object.assign({}, computedMemberTraits, schema.getMemberTraits(), this.getMemberTraits());
-            this.normalizedTraits = void 0;
-            this.memberName = memberName ?? schema.memberName;
-            return;
-        }
-        this.schema = deref(schema);
-        if (isStaticSchema(this.schema)) {
-            this.name = `${this.schema[1]}#${this.schema[2]}`;
-            this.traits = this.schema[3];
-        }
-        else {
-            this.name = this.memberName ?? String(schema);
-            this.traits = 0;
-        }
-        if (this._isMemberSchema && !memberName) {
-            throw new Error(`@smithy/core/schema - NormalizedSchema member init ${this.getName(true)} missing member name.`);
-        }
-    }
-    static [Symbol.hasInstance](lhs) {
-        const isPrototype = this.prototype.isPrototypeOf(lhs);
-        if (!isPrototype && typeof lhs === "object" && lhs !== null) {
-            const ns = lhs;
-            return ns.symbol === this.symbol;
-        }
-        return isPrototype;
-    }
-    static of(ref) {
-        const keyAble = typeof ref === "function" || (typeof ref === "object" && ref !== null);
-        if (typeof ref === "number") {
-            if (simpleSchemaCacheN[ref]) {
-                return simpleSchemaCacheN[ref];
-            }
-        }
-        else if (typeof ref === "string") {
-            if (simpleSchemaCacheS[ref]) {
-                return simpleSchemaCacheS[ref];
-            }
-        }
-        else if (keyAble) {
-            if (ref[anno.ns]) {
-                return ref[anno.ns];
-            }
-        }
-        const sc = deref(ref);
-        if (sc instanceof NormalizedSchema) {
-            return sc;
-        }
-        if (isMemberSchema(sc)) {
-            const [ns, traits] = sc;
-            if (ns instanceof NormalizedSchema) {
-                Object.assign(ns.getMergedTraits(), translateTraits(traits));
-                return ns;
-            }
-            throw new Error(`@smithy/core/schema - may not init unwrapped member schema=${JSON.stringify(ref, null, 2)}.`);
-        }
-        const ns = new NormalizedSchema(sc);
-        if (keyAble) {
-            return (ref[anno.ns] = ns);
-        }
-        if (typeof sc === "string") {
-            return (simpleSchemaCacheS[sc] = ns);
-        }
-        if (typeof sc === "number") {
-            return (simpleSchemaCacheN[sc] = ns);
-        }
-        return ns;
-    }
-    getSchema() {
-        const sc = this.schema;
-        if (Array.isArray(sc) && sc[0] === 0) {
-            return sc[4];
-        }
-        return sc;
-    }
-    getName(withNamespace = false) {
-        const { name } = this;
-        const short = !withNamespace && name && name.includes("#");
-        return short ? name.split("#")[1] : name || undefined;
-    }
-    getMemberName() {
-        return this.memberName;
-    }
-    isMemberSchema() {
-        return this._isMemberSchema;
-    }
-    isListSchema() {
-        const sc = this.getSchema();
-        return typeof sc === "number"
-            ? sc >= 64 && sc < 128
-            : sc[0] === 1;
-    }
-    isMapSchema() {
-        const sc = this.getSchema();
-        return typeof sc === "number"
-            ? sc >= 128 && sc <= 0b1111_1111
-            : sc[0] === 2;
-    }
-    isStructSchema() {
-        const sc = this.getSchema();
-        if (typeof sc !== "object") {
-            return false;
-        }
-        const id = sc[0];
-        return (id === 3 ||
-            id === -3 ||
-            id === 4);
-    }
-    isUnionSchema() {
-        const sc = this.getSchema();
-        if (typeof sc !== "object") {
-            return false;
-        }
-        return sc[0] === 4;
-    }
-    isBlobSchema() {
-        const sc = this.getSchema();
-        return sc === 21 || sc === 42;
-    }
-    isTimestampSchema() {
-        const sc = this.getSchema();
-        return (typeof sc === "number" &&
-            sc >= 4 &&
-            sc <= 7);
-    }
-    isUnitSchema() {
-        return this.getSchema() === "unit";
-    }
-    isDocumentSchema() {
-        return this.getSchema() === 15;
-    }
-    isStringSchema() {
-        return this.getSchema() === 0;
-    }
-    isBooleanSchema() {
-        return this.getSchema() === 2;
-    }
-    isNumericSchema() {
-        return this.getSchema() === 1;
-    }
-    isBigIntegerSchema() {
-        return this.getSchema() === 17;
-    }
-    isBigDecimalSchema() {
-        return this.getSchema() === 19;
-    }
-    isStreaming() {
-        const { streaming } = this.getMergedTraits();
-        return !!streaming || this.getSchema() === 42;
-    }
-    isIdempotencyToken() {
-        return !!this.getMergedTraits().idempotencyToken;
-    }
-    getMergedTraits() {
-        return (this.normalizedTraits ??
-            (this.normalizedTraits = {
-                ...this.getOwnTraits(),
-                ...this.getMemberTraits(),
-            }));
-    }
-    getMemberTraits() {
-        return translateTraits(this.memberTraits);
-    }
-    getOwnTraits() {
-        return translateTraits(this.traits);
-    }
-    getKeySchema() {
-        const [isDoc, isMap] = [this.isDocumentSchema(), this.isMapSchema()];
-        if (!isDoc && !isMap) {
-            throw new Error(`@smithy/core/schema - cannot get key for non-map: ${this.getName(true)}`);
-        }
-        const schema = this.getSchema();
-        const memberSchema = isDoc
-            ? 15
-            : schema[4] ?? 0;
-        return member([memberSchema, 0], "key");
-    }
-    getValueSchema() {
-        const sc = this.getSchema();
-        const [isDoc, isMap, isList] = [this.isDocumentSchema(), this.isMapSchema(), this.isListSchema()];
-        const memberSchema = typeof sc === "number"
-            ? 0b0011_1111 & sc
-            : sc && typeof sc === "object" && (isMap || isList)
-                ? sc[3 + sc[0]]
-                : isDoc
-                    ? 15
-                    : void 0;
-        if (memberSchema != null) {
-            return member([memberSchema, 0], isMap ? "value" : "member");
-        }
-        throw new Error(`@smithy/core/schema - ${this.getName(true)} has no value member.`);
-    }
-    getMemberSchema(memberName) {
-        const struct = this.getSchema();
-        if (this.isStructSchema() && struct[4].includes(memberName)) {
-            const i = struct[4].indexOf(memberName);
-            const memberSchema = struct[5][i];
-            return member(isMemberSchema(memberSchema) ? memberSchema : [memberSchema, 0], memberName);
-        }
-        if (this.isDocumentSchema()) {
-            return member([15, 0], memberName);
-        }
-        throw new Error(`@smithy/core/schema - ${this.getName(true)} has no member=${memberName}.`);
-    }
-    getMemberSchemas() {
-        const buffer = {};
-        try {
-            for (const [k, v] of this.structIterator()) {
-                buffer[k] = v;
-            }
-        }
-        catch (ignored) { }
-        return buffer;
-    }
-    getEventStreamMember() {
-        if (this.isStructSchema()) {
-            for (const [memberName, memberSchema] of this.structIterator()) {
-                if (memberSchema.isStreaming() && memberSchema.isStructSchema()) {
-                    return memberName;
-                }
-            }
-        }
-        return "";
-    }
-    *structIterator() {
-        if (this.isUnitSchema()) {
-            return;
-        }
-        if (!this.isStructSchema()) {
-            throw new Error("@smithy/core/schema - cannot iterate non-struct schema.");
-        }
-        const struct = this.getSchema();
-        const z = struct[4].length;
-        let it = struct[anno.it];
-        if (it && z === it.length) {
-            yield* it;
-            return;
-        }
-        it = Array(z);
-        for (let i = 0; i < z; ++i) {
-            const k = struct[4][i];
-            const v = member([struct[5][i], 0], k);
-            yield (it[i] = [k, v]);
-        }
-        struct[anno.it] = it;
-    }
-}
-function member(memberSchema, memberName) {
-    if (memberSchema instanceof NormalizedSchema) {
-        return Object.assign(memberSchema, {
-            memberName,
-            _isMemberSchema: true,
-        });
-    }
-    const internalCtorAccess = NormalizedSchema;
-    return new internalCtorAccess(memberSchema, memberName);
-}
-const isMemberSchema = (sc) => Array.isArray(sc) && sc.length === 2;
-const isStaticSchema = (sc) => Array.isArray(sc) && sc.length >= 5;
-
-class TypeRegistry {
-    namespace;
-    schemas;
-    exceptions;
-    static registries = new Map();
-    constructor(namespace, schemas = new Map(), exceptions = new Map()) {
-        this.namespace = namespace;
-        this.schemas = schemas;
-        this.exceptions = exceptions;
-    }
-    static for(namespace) {
-        if (!TypeRegistry.registries.has(namespace)) {
-            TypeRegistry.registries.set(namespace, new TypeRegistry(namespace));
-        }
-        return TypeRegistry.registries.get(namespace);
-    }
-    copyFrom(other) {
-        const { schemas, exceptions } = this;
-        for (const [k, v] of other.schemas) {
-            if (!schemas.has(k)) {
-                schemas.set(k, v);
-            }
-        }
-        for (const [k, v] of other.exceptions) {
-            if (!exceptions.has(k)) {
-                exceptions.set(k, v);
-            }
-        }
-    }
-    register(shapeId, schema) {
-        const qualifiedName = this.normalizeShapeId(shapeId);
-        for (const r of [this, TypeRegistry.for(qualifiedName.split("#")[0])]) {
-            r.schemas.set(qualifiedName, schema);
-        }
-    }
-    getSchema(shapeId) {
-        const id = this.normalizeShapeId(shapeId);
-        if (!this.schemas.has(id)) {
-            if (!shapeId.includes("#")) {
-                const suffix = "#" + shapeId;
-                const candidates = [];
-                for (const [shapeId, schema] of this.schemas.entries()) {
-                    if (shapeId.endsWith(suffix)) {
-                        candidates.push(schema);
-                    }
-                }
-                if (candidates.length === 1) {
-                    return candidates[0];
-                }
-            }
-            throw new Error(`@smithy/core/schema - schema not found for ${id}`);
-        }
-        return this.schemas.get(id);
-    }
-    registerError(es, ctor) {
-        const $error = es;
-        const ns = $error[1];
-        for (const r of [this, TypeRegistry.for(ns)]) {
-            r.schemas.set(ns + "#" + $error[2], $error);
-            r.exceptions.set($error, ctor);
-        }
-    }
-    getErrorCtor(es) {
-        const $error = es;
-        if (this.exceptions.has($error)) {
-            return this.exceptions.get($error);
-        }
-        const registry = TypeRegistry.for($error[1]);
-        return registry.exceptions.get($error);
-    }
-    getBaseException() {
-        for (const exceptionKey of this.exceptions.keys()) {
-            if (Array.isArray(exceptionKey)) {
-                const [, ns, name] = exceptionKey;
-                const id = ns + "#" + name;
-                if (id.startsWith("smithy.ts.sdk.synthetic.") && id.endsWith("ServiceException")) {
-                    return exceptionKey;
-                }
-            }
-        }
-        return undefined;
-    }
-    find(predicate) {
-        for (const schema of this.schemas.values()) {
-            if (predicate(schema)) {
-                return schema;
-            }
-        }
-        return undefined;
-    }
-    clear() {
-        this.schemas.clear();
-        this.exceptions.clear();
-    }
-    normalizeShapeId(shapeId) {
-        if (shapeId.includes("#")) {
-            return shapeId;
-        }
-        return this.namespace + "#" + shapeId;
-    }
-}
-
-const SENSITIVE_STRING = "***SensitiveInformation***";
-function schemaLogFilter(schema, data) {
-    if (data == null) {
-        return data;
-    }
-    const ns = NormalizedSchema.of(schema);
-    if (ns.getMergedTraits().sensitive) {
-        return SENSITIVE_STRING;
-    }
-    if (ns.isListSchema()) {
-        const isSensitive = !!ns.getValueSchema().getMergedTraits().sensitive;
-        if (isSensitive) {
-            return SENSITIVE_STRING;
-        }
-    }
-    else if (ns.isMapSchema()) {
-        const isSensitive = !!ns.getKeySchema().getMergedTraits().sensitive || !!ns.getValueSchema().getMergedTraits().sensitive;
-        if (isSensitive) {
-            return SENSITIVE_STRING;
-        }
-    }
-    else if (ns.isStructSchema() && typeof data === "object") {
-        const object = data;
-        const newObject = {};
-        for (const [member, memberNs] of ns.structIterator()) {
-            if (object[member] != null) {
-                newObject[member] = schemaLogFilter(memberNs, object[member]);
-            }
-        }
-        return newObject;
-    }
-    return data;
-}
-
-class Command {
-    middlewareStack = constructStack();
-    schema;
-    static classBuilder() {
-        return new ClassBuilder();
-    }
-    resolveMiddlewareWithContext(clientStack, configuration, options, { middlewareFn, clientName, commandName, inputFilterSensitiveLog, outputFilterSensitiveLog, smithyContext, additionalContext, CommandCtor, }) {
-        for (const mw of middlewareFn.bind(this)(CommandCtor, clientStack, configuration, options)) {
-            this.middlewareStack.use(mw);
-        }
-        const stack = clientStack.concat(this.middlewareStack);
-        const { logger } = configuration;
-        const handlerExecutionContext = {
-            logger,
-            clientName,
-            commandName,
-            inputFilterSensitiveLog,
-            outputFilterSensitiveLog,
-            [SMITHY_CONTEXT_KEY]: {
-                commandInstance: this,
-                ...smithyContext,
-            },
-            ...additionalContext,
-        };
-        const { requestHandler } = configuration;
-        let requestOptions = options ?? {};
-        if (smithyContext.eventStream) {
-            requestOptions = {
-                isEventStream: true,
-                ...requestOptions,
-            };
-        }
-        return stack.resolve((request) => requestHandler.handle(request.request, requestOptions), handlerExecutionContext);
-    }
-}
-class ClassBuilder {
-    _init = () => { };
-    _ep = {};
-    _middlewareFn = () => [];
-    _commandName = "";
-    _clientName = "";
-    _additionalContext = {};
-    _smithyContext = {};
-    _inputFilterSensitiveLog = undefined;
-    _outputFilterSensitiveLog = undefined;
-    _serializer = null;
-    _deserializer = null;
-    _operationSchema;
-    init(cb) {
-        this._init = cb;
-    }
-    ep(endpointParameterInstructions) {
-        this._ep = endpointParameterInstructions;
-        return this;
-    }
-    m(middlewareSupplier) {
-        this._middlewareFn = middlewareSupplier;
-        return this;
-    }
-    s(service, operation, smithyContext = {}) {
-        this._smithyContext = {
-            service,
-            operation,
-            ...smithyContext,
-        };
-        return this;
-    }
-    c(additionalContext = {}) {
-        this._additionalContext = additionalContext;
-        return this;
-    }
-    n(clientName, commandName) {
-        this._clientName = clientName;
-        this._commandName = commandName;
-        return this;
-    }
-    f(inputFilter = (_) => _, outputFilter = (_) => _) {
-        this._inputFilterSensitiveLog = inputFilter;
-        this._outputFilterSensitiveLog = outputFilter;
-        return this;
-    }
-    ser(serializer) {
-        this._serializer = serializer;
-        return this;
-    }
-    de(deserializer) {
-        this._deserializer = deserializer;
-        return this;
-    }
-    sc(operation) {
-        this._operationSchema = operation;
-        this._smithyContext.operationSchema = operation;
-        return this;
-    }
-    build() {
-        const closure = this;
-        let CommandRef;
-        return (CommandRef = class extends Command {
-            input;
-            static getEndpointParameterInstructions() {
-                return closure._ep;
-            }
-            constructor(...[input]) {
-                super();
-                this.input = input ?? {};
-                closure._init(this);
-                this.schema = closure._operationSchema;
-            }
-            resolveMiddleware(stack, configuration, options) {
-                const op = closure._operationSchema;
-                const input = op?.[4] ?? op?.input;
-                const output = op?.[5] ?? op?.output;
-                return this.resolveMiddlewareWithContext(stack, configuration, options, {
-                    CommandCtor: CommandRef,
-                    middlewareFn: closure._middlewareFn,
-                    clientName: closure._clientName,
-                    commandName: closure._commandName,
-                    inputFilterSensitiveLog: closure._inputFilterSensitiveLog ?? (op ? schemaLogFilter.bind(null, input) : (_) => _),
-                    outputFilterSensitiveLog: closure._outputFilterSensitiveLog ?? (op ? schemaLogFilter.bind(null, output) : (_) => _),
-                    smithyContext: closure._smithyContext,
-                    additionalContext: closure._additionalContext,
-                });
-            }
-            serialize = closure._serializer;
-            deserialize = closure._deserializer;
-        });
-    }
-}
-
-class ServiceException extends Error {
-    $fault;
-    $response;
-    $retryable;
-    $metadata;
-    constructor(options) {
-        super(options.message);
-        Object.setPrototypeOf(this, Object.getPrototypeOf(this).constructor.prototype);
-        this.name = options.name;
-        this.$fault = options.$fault;
-        this.$metadata = options.$metadata;
-    }
-    static isInstance(value) {
-        if (!value)
-            return false;
-        const candidate = value;
-        return (ServiceException.prototype.isPrototypeOf(candidate) ||
-            (Boolean(candidate.$fault) &&
-                Boolean(candidate.$metadata) &&
-                (candidate.$fault === "client" || candidate.$fault === "server")));
-    }
-    static [Symbol.hasInstance](instance) {
-        if (!instance)
-            return false;
-        const candidate = instance;
-        if (this === ServiceException) {
-            return ServiceException.isInstance(instance);
-        }
-        if (ServiceException.isInstance(instance)) {
-            if (candidate.name && this.name) {
-                return this.prototype.isPrototypeOf(instance) || candidate.name === this.name;
-            }
-            return this.prototype.isPrototypeOf(instance);
-        }
-        return false;
-    }
-}
-const decorateServiceException = (exception, additions = {}) => {
-    Object.entries(additions)
-        .filter(([, v]) => v !== undefined)
-        .forEach(([k, v]) => {
-        if (exception[k] == undefined || exception[k] === "") {
-            exception[k] = v;
-        }
-    });
-    const message = exception.message || exception.Message || "UnknownError";
-    exception.message = message;
-    delete exception.Message;
-    return exception;
-};
-
-const loadConfigsForDefaultMode = (mode) => {
-    switch (mode) {
-        case "standard":
-            return {
-                retryMode: "standard",
-                connectionTimeout: 3100,
-            };
-        case "in-region":
-            return {
-                retryMode: "standard",
-                connectionTimeout: 1100,
-            };
-        case "cross-region":
-            return {
-                retryMode: "standard",
-                connectionTimeout: 3100,
-            };
-        case "mobile":
-            return {
-                retryMode: "standard",
-                connectionTimeout: 30000,
-            };
-        default:
-            return {};
-    }
-};
-
-let warningEmitted = false;
-const emitWarningIfUnsupportedVersion = (version) => {
-    if (version && !warningEmitted && parseInt(version.substring(1, version.indexOf("."))) < 16) {
-        warningEmitted = true;
-    }
-};
-
-const knownAlgorithms = Object.values(AlgorithmId);
-const getChecksumConfiguration = (runtimeConfig) => {
-    const checksumAlgorithms = [];
-    for (const id in AlgorithmId) {
-        const algorithmId = AlgorithmId[id];
-        if (runtimeConfig[algorithmId] === undefined) {
-            continue;
-        }
-        checksumAlgorithms.push({
-            algorithmId: () => algorithmId,
-            checksumConstructor: () => runtimeConfig[algorithmId],
-        });
-    }
-    for (const [id, ChecksumCtor] of Object.entries(runtimeConfig.checksumAlgorithms ?? {})) {
-        checksumAlgorithms.push({
-            algorithmId: () => id,
-            checksumConstructor: () => ChecksumCtor,
-        });
-    }
-    return {
-        addChecksumAlgorithm(algo) {
-            runtimeConfig.checksumAlgorithms = runtimeConfig.checksumAlgorithms ?? {};
-            const id = algo.algorithmId();
-            const ctor = algo.checksumConstructor();
-            if (knownAlgorithms.includes(id)) {
-                runtimeConfig.checksumAlgorithms[id.toUpperCase()] = ctor;
-            }
-            else {
-                runtimeConfig.checksumAlgorithms[id] = ctor;
-            }
-            checksumAlgorithms.push(algo);
-        },
-        checksumAlgorithms() {
-            return checksumAlgorithms;
-        },
-    };
-};
-const resolveChecksumRuntimeConfig = (clientConfig) => {
-    const runtimeConfig = {};
-    clientConfig.checksumAlgorithms().forEach((checksumAlgorithm) => {
-        const id = checksumAlgorithm.algorithmId();
-        if (knownAlgorithms.includes(id)) {
-            runtimeConfig[id] = checksumAlgorithm.checksumConstructor();
-        }
-    });
-    return runtimeConfig;
-};
-
-const getRetryConfiguration = (runtimeConfig) => {
-    return {
-        setRetryStrategy(retryStrategy) {
-            runtimeConfig.retryStrategy = retryStrategy;
-        },
-        retryStrategy() {
-            return runtimeConfig.retryStrategy;
-        },
-    };
-};
-const resolveRetryRuntimeConfig = (retryStrategyConfiguration) => {
-    const runtimeConfig = {};
-    runtimeConfig.retryStrategy = retryStrategyConfiguration.retryStrategy();
-    return runtimeConfig;
-};
-
-const getDefaultExtensionConfiguration = (runtimeConfig) => {
-    return Object.assign(getChecksumConfiguration(runtimeConfig), getRetryConfiguration(runtimeConfig));
-};
-const resolveDefaultRuntimeConfig = (config) => {
-    return Object.assign(resolveChecksumRuntimeConfig(config), resolveRetryRuntimeConfig(config));
-};
-
-const getValueFromTextNode = (obj) => {
-    const textNodeName = "#text";
-    for (const key in obj) {
-        if (obj.hasOwnProperty(key) && obj[key][textNodeName] !== undefined) {
-            obj[key] = obj[key][textNodeName];
-        }
-        else if (typeof obj[key] === "object" && obj[key] !== null) {
-            obj[key] = getValueFromTextNode(obj[key]);
-        }
-    }
-    return obj;
-};
-
-class NoOpLogger {
-    trace() { }
-    debug() { }
-    info() { }
-    warn() { }
-    error() { }
-}
-
 const THROTTLING_ERROR_CODES = [
     "BandwidthLimitExceeded",
     "EC2ThrottledException",
@@ -32874,7 +32874,7 @@ const THROTTLING_ERROR_CODES = [
 const TRANSIENT_ERROR_CODES = ["TimeoutError", "RequestTimeout", "RequestTimeoutException"];
 const TRANSIENT_ERROR_STATUS_CODES = [500, 502, 503, 504];
 const NODEJS_TIMEOUT_ERROR_CODES$1 = ["ECONNRESET", "ECONNREFUSED", "EPIPE", "ETIMEDOUT"];
-const NODEJS_NETWORK_ERROR_CODES = ["EHOSTUNREACH", "ENETUNREACH", "ENOTFOUND"];
+const NODEJS_NETWORK_ERROR_CODES = ["EHOSTUNREACH", "ENETUNREACH", "ENOTFOUND", "EAI_AGAIN"];
 
 const isRetryableByTrait = (error) => error?.$retryable !== undefined;
 const isClockSkewCorrectedError = (error) => error.$metadata?.clockSkewCorrected;
@@ -33017,9 +33017,6 @@ function bindRetryMiddleware(isStreamingPayload) {
                         retryToken = await retryStrategy.refreshRetryTokenForRetry(retryToken, retryErrorInfo);
                     }
                     catch (refreshError) {
-                        if (typeof refreshError.$backoff === "number") {
-                            await cooldown(refreshError.$backoff);
-                        }
                         if (!lastError.$metadata) {
                             lastError.$metadata = {};
                         }
@@ -33029,8 +33026,10 @@ function bindRetryMiddleware(isStreamingPayload) {
                     }
                     attempts = retryToken.getRetryCount();
                     const delay = retryToken.getRetryDelay();
-                    totalRetryDelay += delay;
-                    await cooldown(delay);
+                    totalRetryDelay += (retryToken?.$retryLog?.acquisitionDelay ?? 0) + delay;
+                    if (delay > 0) {
+                        await cooldown(delay);
+                    }
                 }
             }
         }
@@ -33231,6 +33230,9 @@ class DefaultRetryToken {
     count;
     cost;
     longPoll;
+    $retryLog = {
+        acquisitionDelay: 0,
+    };
     constructor(delay, count, cost, longPoll) {
         this.delay = delay;
         this.count = count;
@@ -33266,8 +33268,8 @@ const refusal = {
 };
 class StandardRetryStrategy {
     mode = RETRY_MODES.STANDARD;
-    capacity = INITIAL_RETRY_TOKENS;
     retryBackoffStrategy;
+    capacity = INITIAL_RETRY_TOKENS;
     maxAttemptsProvider;
     baseDelay;
     constructor(arg1) {
@@ -33303,14 +33305,18 @@ class StandardRetryStrategy {
                 retryDelay = Math.max(delayFromErrorType, Math.min(errorInfo.retryAfterHint.getTime() - Date.now(), delayFromErrorType + 5_000));
             }
             if (!shouldRetry) {
-                throw Object.assign(new Error("No retry token available"), {
-                    $backoff: Retry.v2026 && retryCode === refusal.capacity && isLongPoll ? retryDelay : 0,
-                });
+                const longPollBackoff = Retry.v2026 && retryCode === refusal.capacity && isLongPoll ? retryDelay : 0;
+                if (longPollBackoff > 0) {
+                    await new Promise((r) => setTimeout(r, longPollBackoff));
+                }
             }
             else {
                 const capacityCost = this.getCapacityCost(errorType);
                 this.capacity -= capacityCost;
-                return new DefaultRetryToken(retryDelay, token.getRetryCount() + 1, capacityCost, token.isLongPoll?.() ?? false);
+                const nextToken = new DefaultRetryToken(0, token.getRetryCount() + 1, capacityCost, token.isLongPoll?.() ?? false);
+                await new Promise((r) => setTimeout(r, retryDelay));
+                nextToken.$retryLog.acquisitionDelay = retryDelay;
+                return nextToken;
             }
         }
         throw new Error("No retry token available");
@@ -33407,17 +33413,29 @@ const NODE_MAX_ATTEMPT_CONFIG_OPTIONS = {
     },
     default: DEFAULT_MAX_ATTEMPTS,
 };
-const resolveRetryConfig = (input) => {
+const resolveRetryConfig = (input, defaults) => {
     const { retryStrategy, retryMode } = input;
-    const maxAttempts = normalizeProvider$1(input.maxAttempts ?? DEFAULT_MAX_ATTEMPTS);
+    const { defaultMaxAttempts = DEFAULT_MAX_ATTEMPTS, defaultBaseDelay = Retry.delay() } = {};
+    const maxAttemptsProvider = normalizeProvider$1(input.maxAttempts ?? defaultMaxAttempts);
     let controller = retryStrategy
         ? Promise.resolve(retryStrategy)
         : undefined;
-    const getDefault = async () => (await normalizeProvider$1(retryMode)()) === RETRY_MODES.ADAPTIVE
-        ? new AdaptiveRetryStrategy(maxAttempts)
-        : new StandardRetryStrategy(maxAttempts);
+    const getDefault = async () => {
+        const maxAttempts = await maxAttemptsProvider();
+        const adaptive = (await normalizeProvider$1(retryMode)()) === RETRY_MODES.ADAPTIVE;
+        if (adaptive) {
+            return new AdaptiveRetryStrategy(maxAttemptsProvider, {
+                maxAttempts,
+                baseDelay: defaultBaseDelay,
+            });
+        }
+        return new StandardRetryStrategy({
+            maxAttempts,
+            baseDelay: defaultBaseDelay,
+        });
+    };
     return Object.assign(input, {
-        maxAttempts,
+        maxAttempts: maxAttemptsProvider,
         retryStrategy: () => (controller ??= getDefault()),
     });
 };
@@ -35185,7 +35203,7 @@ const commonParams$4 = {
     UseDualStack: { type: "builtInParams", name: "useDualstackEndpoint" },
 };
 
-var version$1 = "3.1054.0";
+var version$1 = "3.1062.0";
 var packageInfo$1 = {
 	version: version$1};
 
@@ -35251,9 +35269,20 @@ function memoizeChain(providers, treatAsExpired) {
     let activeLock;
     let passiveLock;
     let credentials;
+    let forceRefreshLock;
     const provider = async (options) => {
         if (options?.forceRefresh) {
-            return await chain(options);
+            if (!forceRefreshLock) {
+                forceRefreshLock = chain(options)
+                    .then((c) => {
+                    credentials = c;
+                })
+                    .finally(() => {
+                    forceRefreshLock = undefined;
+                });
+            }
+            await forceRefreshLock;
+            return credentials;
         }
         if (credentials?.expiration) {
             if (credentials?.expiration?.getTime() < Date.now()) {
@@ -35672,7 +35701,7 @@ or increase socketAcquisitionWarningTimeout=(millis) in the NodeHttpHandler conf
             const expectContinue = headers ? (headers.Expect ?? headers.expect) === "100-continue" : false;
             let agent = isSSL ? config.httpsAgent : config.httpAgent;
             if (expectContinue && !this.externalAgent) {
-                agent = new (isSSL ? Agent : hAgent)({
+                agent = new (isSSL ? node_https.Agent : hAgent)({
                     keepAlive: false,
                     maxSockets: Infinity,
                 });
@@ -35710,7 +35739,7 @@ or increase socketAcquisitionWarningTimeout=(millis) in the NodeHttpHandler conf
                 agent,
                 auth,
             };
-            const requestFunc = isSSL ? request$2 : hRequest;
+            const requestFunc = isSSL ? node_https.request : hRequest;
             const req = requestFunc(nodeHttpsOptions, (res) => {
                 const httpResponse = new HttpResponse({
                     statusCode: res.statusCode || -1,
@@ -35783,7 +35812,8 @@ or increase socketAcquisitionWarningTimeout=(millis) in the NodeHttpHandler conf
             socketAcquisitionWarningTimeout,
             throwOnRequestTimeout,
             httpAgentProvider: async () => {
-                const { Agent, request } = await import('node:http');
+                const node_http = await import('node:http');
+                const { Agent, request } = node_http.default ?? node_http;
                 hRequest = request;
                 hAgent = Agent;
                 if (httpAgent instanceof hAgent || typeof httpAgent?.destroy === "function") {
@@ -35793,11 +35823,11 @@ or increase socketAcquisitionWarningTimeout=(millis) in the NodeHttpHandler conf
                 return new hAgent({ keepAlive, maxSockets, ...httpAgent });
             },
             httpsAgent: (() => {
-                if (httpsAgent instanceof Agent || typeof httpsAgent?.destroy === "function") {
+                if (httpsAgent instanceof node_https.Agent || typeof httpsAgent?.destroy === "function") {
                     this.externalAgent = true;
                     return httpsAgent;
                 }
-                return new Agent({ keepAlive, maxSockets, ...httpsAgent });
+                return new node_https.Agent({ keepAlive, maxSockets, ...httpsAgent });
             })(),
             logger,
         };
@@ -37153,7 +37183,6 @@ const CURRENCY$1 = {
   yen: '¥',
   euro: '€',
   dollar: '$',
-  euro: '€',
   fnof: 'ƒ',
   inr: '₹',
   af: '؋',
@@ -37493,7 +37522,7 @@ class EntityDecoder {
   decode(str) {
     if (typeof str !== 'string' || str.length === 0) return str;
     //TODO: check if needed
-    //if (str.indexOf('&') === -1) return str; // fast path — no entities at all
+    if (str.indexOf('&') === -1) return str; // fast path — no entities at all
 
     const original = str;
     const chunks = [];
@@ -42468,7 +42497,7 @@ const providerConfigFromInit = ({ maxRetries = DEFAULT_MAX_RETRIES, timeout = DE
 
 function httpRequest(options) {
     return new Promise((resolve, reject) => {
-        const req = request$3({
+        const req = require$$2.request({
             method: "GET",
             ...options,
             hostname: options.hostname?.replace(/^\[(.+)\]$/, "$1"),
@@ -42538,14 +42567,8 @@ const requestFromEcsImds = async (timeout, options) => {
     return buffer.toString();
 };
 const CMDS_IP = "169.254.170.2";
-const GREENGRASS_HOSTS = {
-    localhost: true,
-    "127.0.0.1": true,
-};
-const GREENGRASS_PROTOCOLS = {
-    "http:": true,
-    "https:": true,
-};
+const GREENGRASS_HOSTS = new Set(["localhost", "127.0.0.1"]);
+const GREENGRASS_PROTOCOLS = new Set(["http:", "https:"]);
 const getCmdsUri = async ({ logger }) => {
     if (process.env[ENV_CMDS_RELATIVE_URI]) {
         return {
@@ -42554,21 +42577,29 @@ const getCmdsUri = async ({ logger }) => {
         };
     }
     if (process.env[ENV_CMDS_FULL_URI]) {
-        const parsed = parse$1(process.env[ENV_CMDS_FULL_URI]);
-        if (!parsed.hostname || !(parsed.hostname in GREENGRASS_HOSTS)) {
+        let parsed;
+        try {
+            parsed = new URL(process.env[ENV_CMDS_FULL_URI]);
+        }
+        catch {
+            throw new CredentialsProviderError(`${process.env[ENV_CMDS_FULL_URI]} is not a valid container metadata service URL`, { tryNextLink: false, logger });
+        }
+        if (!parsed.hostname || !GREENGRASS_HOSTS.has(parsed.hostname)) {
             throw new CredentialsProviderError(`${parsed.hostname} is not a valid container metadata service hostname`, {
                 tryNextLink: false,
                 logger,
             });
         }
-        if (!parsed.protocol || !(parsed.protocol in GREENGRASS_PROTOCOLS)) {
+        if (!parsed.protocol || !GREENGRASS_PROTOCOLS.has(parsed.protocol)) {
             throw new CredentialsProviderError(`${parsed.protocol} is not a valid container metadata service protocol`, {
                 tryNextLink: false,
                 logger,
             });
         }
         return {
-            ...parsed,
+            protocol: parsed.protocol,
+            hostname: parsed.hostname,
+            path: parsed.pathname + parsed.search,
             port: parsed.port ? parseInt(parsed.port, 10) : undefined,
         };
     }
@@ -43925,10 +43956,9 @@ var index$3 = /*#__PURE__*/Object.freeze({
 const defaultSSOOIDCHttpAuthSchemeParametersProvider = async (config, context, input) => {
     return {
         operation: getSmithyContext(context).operation,
-        region: (await normalizeProvider$1(config.region)()) ||
-            (() => {
-                throw new Error("expected `region` to be configured for `aws.auth#sigv4`");
-            })(),
+        region: await normalizeProvider$1(config.region)() || (() => {
+            throw new Error("expected `region` to be configured for `aws.auth#sigv4`");
+        })(),
     };
 };
 function createAwsAuthSigv4HttpAuthOption$3(authParameters) {
@@ -43985,7 +44015,7 @@ const commonParams$3 = {
     UseDualStack: { type: "builtInParams", name: "useDualstackEndpoint" },
 };
 
-var version = "3.997.12";
+var version = "3.997.16";
 var packageInfo = {
 	version: version};
 
@@ -44000,7 +44030,7 @@ const _data$3 = {
         [e$3, [{ [k$3]: "UseDualStack" }, b$3]],
         [e$3, [{ fn: f$3, argv: [h$3, "supportsDualStack"] }, b$3]],
         [e$3, [{ fn: f$3, argv: [h$3, "supportsFIPS"] }, b$3]],
-        ["stringEquals", [{ fn: f$3, argv: [h$3, "name"] }, "aws-us-gov"]],
+        ["stringEquals", [{ fn: f$3, argv: [h$3, "name"] }, "aws-us-gov"]]
     ],
     results: [
         [a$3],
@@ -44015,54 +44045,26 @@ const _data$3 = {
         ["https://oidc.{Region}.{PartitionResult#dualStackDnsSuffix}", i$3],
         [a$3, "DualStack is enabled but this partition does not support DualStack"],
         ["https://oidc.{Region}.{PartitionResult#dnsSuffix}", i$3],
-        [a$3, "Invalid Configuration: Missing Region"],
-    ],
+        [a$3, "Invalid Configuration: Missing Region"]
+    ]
 };
 const root$3 = 2;
 const r$3 = 100_000_000;
 const nodes$3 = new Int32Array([
-    -1,
-    1,
-    -1,
-    0,
-    13,
-    3,
-    1,
-    4,
-    r$3 + 12,
-    2,
-    5,
-    r$3 + 12,
-    3,
-    8,
-    6,
-    4,
-    7,
-    r$3 + 11,
-    5,
-    r$3 + 9,
-    r$3 + 10,
-    4,
-    11,
-    9,
-    6,
-    10,
-    r$3 + 8,
-    7,
-    r$3 + 6,
-    r$3 + 7,
-    5,
-    12,
-    r$3 + 5,
-    6,
-    r$3 + 4,
-    r$3 + 5,
-    3,
-    r$3 + 1,
-    14,
-    4,
-    r$3 + 2,
-    r$3 + 3,
+    -1, 1, -1,
+    0, 13, 3,
+    1, 4, r$3 + 12,
+    2, 5, r$3 + 12,
+    3, 8, 6,
+    4, 7, r$3 + 11,
+    5, r$3 + 9, r$3 + 10,
+    4, 11, 9,
+    6, 10, r$3 + 8,
+    7, r$3 + 6, r$3 + 7,
+    5, 12, r$3 + 5,
+    6, r$3 + 4, r$3 + 5,
+    3, r$3 + 1, 14,
+    4, r$3 + 2, r$3 + 3,
 ]);
 const bdd$3 = BinaryDecisionDiagram.from(nodes$3, root$3, _data$3.conditions, _data$3.results);
 
@@ -44311,93 +44313,93 @@ const _s_registry$3 = TypeRegistry.for(_s$3);
 var SSOOIDCServiceException$ = [-3, _s$3, "SSOOIDCServiceException", 0, [], []];
 _s_registry$3.registerError(SSOOIDCServiceException$, SSOOIDCServiceException);
 const n0_registry$3 = TypeRegistry.for(n0$3);
-var AccessDeniedException$$1 = [
-    -3,
-    n0$3,
-    _ADE$1,
+var AccessDeniedException$$1 = [-3, n0$3, _ADE$1,
     { [_e$3]: _c$3, [_hE$3]: 400 },
     [_e$3, _r, _ed],
-    [0, 0, 0],
+    [0, 0, 0]
 ];
 n0_registry$3.registerError(AccessDeniedException$$1, AccessDeniedException$1);
-var AuthorizationPendingException$ = [
-    -3,
-    n0$3,
-    _APE,
+var AuthorizationPendingException$ = [-3, n0$3, _APE,
     { [_e$3]: _c$3, [_hE$3]: 400 },
     [_e$3, _ed],
-    [0, 0],
+    [0, 0]
 ];
 n0_registry$3.registerError(AuthorizationPendingException$, AuthorizationPendingException);
-var ExpiredTokenException$$1 = [-3, n0$3, _ETE$1, { [_e$3]: _c$3, [_hE$3]: 400 }, [_e$3, _ed], [0, 0]];
+var ExpiredTokenException$$1 = [-3, n0$3, _ETE$1,
+    { [_e$3]: _c$3, [_hE$3]: 400 },
+    [_e$3, _ed],
+    [0, 0]
+];
 n0_registry$3.registerError(ExpiredTokenException$$1, ExpiredTokenException$1);
-var InternalServerException$$1 = [-3, n0$3, _ISE$1, { [_e$3]: _se$1, [_hE$3]: 500 }, [_e$3, _ed], [0, 0]];
+var InternalServerException$$1 = [-3, n0$3, _ISE$1,
+    { [_e$3]: _se$1, [_hE$3]: 500 },
+    [_e$3, _ed],
+    [0, 0]
+];
 n0_registry$3.registerError(InternalServerException$$1, InternalServerException$1);
-var InvalidClientException$ = [-3, n0$3, _ICE, { [_e$3]: _c$3, [_hE$3]: 401 }, [_e$3, _ed], [0, 0]];
+var InvalidClientException$ = [-3, n0$3, _ICE,
+    { [_e$3]: _c$3, [_hE$3]: 401 },
+    [_e$3, _ed],
+    [0, 0]
+];
 n0_registry$3.registerError(InvalidClientException$, InvalidClientException);
-var InvalidGrantException$ = [-3, n0$3, _IGE, { [_e$3]: _c$3, [_hE$3]: 400 }, [_e$3, _ed], [0, 0]];
+var InvalidGrantException$ = [-3, n0$3, _IGE,
+    { [_e$3]: _c$3, [_hE$3]: 400 },
+    [_e$3, _ed],
+    [0, 0]
+];
 n0_registry$3.registerError(InvalidGrantException$, InvalidGrantException);
-var InvalidRequestException$$1 = [
-    -3,
-    n0$3,
-    _IRE$1,
+var InvalidRequestException$$1 = [-3, n0$3, _IRE$1,
     { [_e$3]: _c$3, [_hE$3]: 400 },
     [_e$3, _r, _ed],
-    [0, 0, 0],
+    [0, 0, 0]
 ];
 n0_registry$3.registerError(InvalidRequestException$$1, InvalidRequestException$1);
-var InvalidScopeException$ = [-3, n0$3, _ISEn, { [_e$3]: _c$3, [_hE$3]: 400 }, [_e$3, _ed], [0, 0]];
-n0_registry$3.registerError(InvalidScopeException$, InvalidScopeException);
-var SlowDownException$ = [-3, n0$3, _SDE, { [_e$3]: _c$3, [_hE$3]: 400 }, [_e$3, _ed], [0, 0]];
-n0_registry$3.registerError(SlowDownException$, SlowDownException);
-var UnauthorizedClientException$ = [
-    -3,
-    n0$3,
-    _UCE,
+var InvalidScopeException$ = [-3, n0$3, _ISEn,
     { [_e$3]: _c$3, [_hE$3]: 400 },
     [_e$3, _ed],
-    [0, 0],
+    [0, 0]
+];
+n0_registry$3.registerError(InvalidScopeException$, InvalidScopeException);
+var SlowDownException$ = [-3, n0$3, _SDE,
+    { [_e$3]: _c$3, [_hE$3]: 400 },
+    [_e$3, _ed],
+    [0, 0]
+];
+n0_registry$3.registerError(SlowDownException$, SlowDownException);
+var UnauthorizedClientException$ = [-3, n0$3, _UCE,
+    { [_e$3]: _c$3, [_hE$3]: 400 },
+    [_e$3, _ed],
+    [0, 0]
 ];
 n0_registry$3.registerError(UnauthorizedClientException$, UnauthorizedClientException);
-var UnsupportedGrantTypeException$ = [
-    -3,
-    n0$3,
-    _UGTE,
+var UnsupportedGrantTypeException$ = [-3, n0$3, _UGTE,
     { [_e$3]: _c$3, [_hE$3]: 400 },
     [_e$3, _ed],
-    [0, 0],
+    [0, 0]
 ];
 n0_registry$3.registerError(UnsupportedGrantTypeException$, UnsupportedGrantTypeException);
-const errorTypeRegistries$3 = [_s_registry$3, n0_registry$3];
+const errorTypeRegistries$3 = [
+    _s_registry$3,
+    n0_registry$3,
+];
 var AccessToken = [0, n0$3, _AT$1, 8, 0];
 var ClientSecret = [0, n0$3, _CS, 8, 0];
 var CodeVerifier = [0, n0$3, _CV, 8, 0];
 var IdToken = [0, n0$3, _IT, 8, 0];
 var RefreshToken$1 = [0, n0$3, _RT$1, 8, 0];
-var CreateTokenRequest$ = [
-    3,
-    n0$3,
-    _CTR,
+var CreateTokenRequest$ = [3, n0$3, _CTR,
     0,
     [_cI$1, _cS, _gT$1, _dC, _co$1, _rT$1, _sc, _rU$1, _cV$1],
-    [0, [() => ClientSecret, 0], 0, 0, 0, [() => RefreshToken$1, 0], 64 | 0, 0, [() => CodeVerifier, 0]],
-    3,
+    [0, [() => ClientSecret, 0], 0, 0, 0, [() => RefreshToken$1, 0], 64 | 0, 0, [() => CodeVerifier, 0]], 3
 ];
-var CreateTokenResponse$ = [
-    3,
-    n0$3,
-    _CTRr,
+var CreateTokenResponse$ = [3, n0$3, _CTRr,
     0,
     [_aT$2, _tT$1, _eI$1, _rT$1, _iT$1],
-    [[() => AccessToken, 0], 0, 1, [() => RefreshToken$1, 0], [() => IdToken, 0]],
+    [[() => AccessToken, 0], 0, 1, [() => RefreshToken$1, 0], [() => IdToken, 0]]
 ];
-var CreateToken$ = [
-    9,
-    n0$3,
-    _CT,
-    { [_h$2]: ["POST", "/token", 200] },
-    () => CreateTokenRequest$,
-    () => CreateTokenResponse$,
+var CreateToken$ = [9, n0$3, _CT,
+    { [_h$2]: ["POST", "/token", 200] }, () => CreateTokenRequest$, () => CreateTokenResponse$
 ];
 
 const getRuntimeConfig$7 = (config) => {
@@ -44453,11 +44455,9 @@ const getRuntimeConfig$6 = (config) => {
         defaultsMode,
         authSchemePreference: config?.authSchemePreference ?? loadConfig(NODE_AUTH_SCHEME_PREFERENCE_OPTIONS, loaderConfig),
         bodyLengthChecker: config?.bodyLengthChecker ?? calculateBodyLength,
-        defaultUserAgentProvider: config?.defaultUserAgentProvider ??
-            createDefaultUserAgentProvider({ serviceId: clientSharedValues.serviceId, clientVersion: packageInfo.version }),
+        defaultUserAgentProvider: config?.defaultUserAgentProvider ?? createDefaultUserAgentProvider({ serviceId: clientSharedValues.serviceId, clientVersion: packageInfo.version }),
         maxAttempts: config?.maxAttempts ?? loadConfig(NODE_MAX_ATTEMPT_CONFIG_OPTIONS, config),
-        region: config?.region ??
-            loadConfig(NODE_REGION_CONFIG_OPTIONS, { ...NODE_REGION_CONFIG_FILE_OPTIONS, ...loaderConfig }),
+        region: config?.region ?? loadConfig(NODE_REGION_CONFIG_OPTIONS, { ...NODE_REGION_CONFIG_FILE_OPTIONS, ...loaderConfig }),
         requestHandler: NodeHttpHandler.create(config?.requestHandler ?? defaultConfigProvider),
         retryMode: config?.retryMode ??
             loadConfig({
@@ -44603,10 +44603,9 @@ var index$2 = /*#__PURE__*/Object.freeze({
 const defaultSSOHttpAuthSchemeParametersProvider = async (config, context, input) => {
     return {
         operation: getSmithyContext(context).operation,
-        region: (await normalizeProvider$1(config.region)()) ||
-            (() => {
-                throw new Error("expected `region` to be configured for `aws.auth#sigv4`");
-            })(),
+        region: await normalizeProvider$1(config.region)() || (() => {
+            throw new Error("expected `region` to be configured for `aws.auth#sigv4`");
+        })(),
     };
 };
 function createAwsAuthSigv4HttpAuthOption$2(authParameters) {
@@ -44674,7 +44673,7 @@ const _data$2 = {
         [e$2, [{ [k$2]: "UseDualStack" }, b$2]],
         [e$2, [{ fn: f$2, argv: [h$2, "supportsDualStack"] }, b$2]],
         [e$2, [{ fn: f$2, argv: [h$2, "supportsFIPS"] }, b$2]],
-        ["stringEquals", [{ fn: f$2, argv: [h$2, "name"] }, "aws-us-gov"]],
+        ["stringEquals", [{ fn: f$2, argv: [h$2, "name"] }, "aws-us-gov"]]
     ],
     results: [
         [a$2],
@@ -44689,54 +44688,26 @@ const _data$2 = {
         ["https://portal.sso.{Region}.{PartitionResult#dualStackDnsSuffix}", i$2],
         [a$2, "DualStack is enabled but this partition does not support DualStack"],
         ["https://portal.sso.{Region}.{PartitionResult#dnsSuffix}", i$2],
-        [a$2, "Invalid Configuration: Missing Region"],
-    ],
+        [a$2, "Invalid Configuration: Missing Region"]
+    ]
 };
 const root$2 = 2;
 const r$2 = 100_000_000;
 const nodes$2 = new Int32Array([
-    -1,
-    1,
-    -1,
-    0,
-    13,
-    3,
-    1,
-    4,
-    r$2 + 12,
-    2,
-    5,
-    r$2 + 12,
-    3,
-    8,
-    6,
-    4,
-    7,
-    r$2 + 11,
-    5,
-    r$2 + 9,
-    r$2 + 10,
-    4,
-    11,
-    9,
-    6,
-    10,
-    r$2 + 8,
-    7,
-    r$2 + 6,
-    r$2 + 7,
-    5,
-    12,
-    r$2 + 5,
-    6,
-    r$2 + 4,
-    r$2 + 5,
-    3,
-    r$2 + 1,
-    14,
-    4,
-    r$2 + 2,
-    r$2 + 3,
+    -1, 1, -1,
+    0, 13, 3,
+    1, 4, r$2 + 12,
+    2, 5, r$2 + 12,
+    3, 8, 6,
+    4, 7, r$2 + 11,
+    5, r$2 + 9, r$2 + 10,
+    4, 11, 9,
+    6, 10, r$2 + 8,
+    7, r$2 + 6, r$2 + 7,
+    5, 12, r$2 + 5,
+    6, r$2 + 4, r$2 + 5,
+    3, r$2 + 1, 14,
+    4, r$2 + 2, r$2 + 3,
 ]);
 const bdd$2 = BinaryDecisionDiagram.from(nodes$2, root$2, _data$2.conditions, _data$2.results);
 
@@ -44843,54 +44814,54 @@ const _s_registry$2 = TypeRegistry.for(_s$2);
 var SSOServiceException$ = [-3, _s$2, "SSOServiceException", 0, [], []];
 _s_registry$2.registerError(SSOServiceException$, SSOServiceException);
 const n0_registry$2 = TypeRegistry.for(n0$2);
-var InvalidRequestException$ = [-3, n0$2, _IRE, { [_e$2]: _c$2, [_hE$2]: 400 }, [_m$2], [0]];
+var InvalidRequestException$ = [-3, n0$2, _IRE,
+    { [_e$2]: _c$2, [_hE$2]: 400 },
+    [_m$2],
+    [0]
+];
 n0_registry$2.registerError(InvalidRequestException$, InvalidRequestException);
-var ResourceNotFoundException$ = [-3, n0$2, _RNFE, { [_e$2]: _c$2, [_hE$2]: 404 }, [_m$2], [0]];
+var ResourceNotFoundException$ = [-3, n0$2, _RNFE,
+    { [_e$2]: _c$2, [_hE$2]: 404 },
+    [_m$2],
+    [0]
+];
 n0_registry$2.registerError(ResourceNotFoundException$, ResourceNotFoundException);
-var TooManyRequestsException$ = [-3, n0$2, _TMRE$1, { [_e$2]: _c$2, [_hE$2]: 429 }, [_m$2], [0]];
+var TooManyRequestsException$ = [-3, n0$2, _TMRE$1,
+    { [_e$2]: _c$2, [_hE$2]: 429 },
+    [_m$2],
+    [0]
+];
 n0_registry$2.registerError(TooManyRequestsException$, TooManyRequestsException);
-var UnauthorizedException$ = [-3, n0$2, _UE, { [_e$2]: _c$2, [_hE$2]: 401 }, [_m$2], [0]];
+var UnauthorizedException$ = [-3, n0$2, _UE,
+    { [_e$2]: _c$2, [_hE$2]: 401 },
+    [_m$2],
+    [0]
+];
 n0_registry$2.registerError(UnauthorizedException$, UnauthorizedException);
-const errorTypeRegistries$2 = [_s_registry$2, n0_registry$2];
+const errorTypeRegistries$2 = [
+    _s_registry$2,
+    n0_registry$2,
+];
 var AccessTokenType = [0, n0$2, _ATT, 8, 0];
 var SecretAccessKeyType = [0, n0$2, _SAKT, 8, 0];
 var SessionTokenType = [0, n0$2, _STT, 8, 0];
-var GetRoleCredentialsRequest$ = [
-    3,
-    n0$2,
-    _GRCR,
+var GetRoleCredentialsRequest$ = [3, n0$2, _GRCR,
     0,
     [_rN, _aI, _aT$1],
-    [
-        [0, { [_hQ]: _rn }],
-        [0, { [_hQ]: _ai }],
-        [() => AccessTokenType, { [_hH]: _xasbt }],
-    ],
-    3,
+    [[0, { [_hQ]: _rn }], [0, { [_hQ]: _ai }], [() => AccessTokenType, { [_hH]: _xasbt }]], 3
 ];
-var GetRoleCredentialsResponse$ = [
-    3,
-    n0$2,
-    _GRCRe,
+var GetRoleCredentialsResponse$ = [3, n0$2, _GRCRe,
     0,
     [_rC],
-    [[() => RoleCredentials$, 0]],
+    [[() => RoleCredentials$, 0]]
 ];
-var RoleCredentials$ = [
-    3,
-    n0$2,
-    _RC,
+var RoleCredentials$ = [3, n0$2, _RC,
     0,
     [_aKI$1, _sAK$1, _sT$1, _ex],
-    [0, [() => SecretAccessKeyType, 0], [() => SessionTokenType, 0], 1],
+    [0, [() => SecretAccessKeyType, 0], [() => SessionTokenType, 0], 1]
 ];
-var GetRoleCredentials$ = [
-    9,
-    n0$2,
-    _GRC,
-    { [_h$1]: ["GET", "/federation/credentials", 200] },
-    () => GetRoleCredentialsRequest$,
-    () => GetRoleCredentialsResponse$,
+var GetRoleCredentials$ = [9, n0$2, _GRC,
+    { [_h$1]: ["GET", "/federation/credentials", 200] }, () => GetRoleCredentialsRequest$, () => GetRoleCredentialsResponse$
 ];
 
 const getRuntimeConfig$5 = (config) => {
@@ -44946,11 +44917,9 @@ const getRuntimeConfig$4 = (config) => {
         defaultsMode,
         authSchemePreference: config?.authSchemePreference ?? loadConfig(NODE_AUTH_SCHEME_PREFERENCE_OPTIONS, loaderConfig),
         bodyLengthChecker: config?.bodyLengthChecker ?? calculateBodyLength,
-        defaultUserAgentProvider: config?.defaultUserAgentProvider ??
-            createDefaultUserAgentProvider({ serviceId: clientSharedValues.serviceId, clientVersion: packageInfo.version }),
+        defaultUserAgentProvider: config?.defaultUserAgentProvider ?? createDefaultUserAgentProvider({ serviceId: clientSharedValues.serviceId, clientVersion: packageInfo.version }),
         maxAttempts: config?.maxAttempts ?? loadConfig(NODE_MAX_ATTEMPT_CONFIG_OPTIONS, config),
-        region: config?.region ??
-            loadConfig(NODE_REGION_CONFIG_OPTIONS, { ...NODE_REGION_CONFIG_FILE_OPTIONS, ...loaderConfig }),
+        region: config?.region ?? loadConfig(NODE_REGION_CONFIG_OPTIONS, { ...NODE_REGION_CONFIG_FILE_OPTIONS, ...loaderConfig }),
         requestHandler: NodeHttpHandler.create(config?.requestHandler ?? defaultConfigProvider),
         retryMode: config?.retryMode ??
             loadConfig({
@@ -45201,7 +45170,7 @@ const _data$1 = {
         [f$1, [m$1, "ap-southeast-1"]],
         [f$1, [m$1, "ap-northeast-1"]],
         [f$1, [m$1, "ap-southeast-2"]],
-        [f$1, [{ fn: g$1, argv: [n, "name"] }, "aws-us-gov"]],
+        [f$1, [{ fn: g$1, argv: [n, "name"] }, "aws-us-gov"]]
     ],
     results: [
         [a$1],
@@ -45218,105 +45187,43 @@ const _data$1 = {
         ["https://sts.{Region}.{PartitionResult#dualStackDnsSuffix}", o],
         [a$1, "DualStack is enabled but this partition does not support DualStack"],
         [k$1, o],
-        [a$1, "Invalid Configuration: Missing Region"],
-    ],
+        [a$1, "Invalid Configuration: Missing Region"]
+    ]
 };
 const root$1 = 2;
 const r$1 = 100_000_000;
 const nodes$1 = new Int32Array([
-    -1,
-    1,
-    -1,
-    0,
-    30,
-    3,
-    1,
-    4,
-    r$1 + 14,
-    2,
-    5,
-    r$1 + 14,
-    3,
-    25,
-    6,
-    4,
-    24,
-    7,
-    5,
-    r$1 + 1,
-    8,
-    6,
-    9,
-    r$1 + 13,
-    7,
-    r$1 + 1,
-    10,
-    10,
-    r$1 + 1,
-    11,
-    11,
-    r$1 + 1,
-    12,
-    12,
-    r$1 + 1,
-    13,
-    13,
-    r$1 + 1,
-    14,
-    14,
-    r$1 + 1,
-    15,
-    15,
-    r$1 + 1,
-    16,
-    16,
-    r$1 + 1,
-    17,
-    17,
-    r$1 + 1,
-    18,
-    18,
-    r$1 + 1,
-    19,
-    19,
-    r$1 + 1,
-    20,
-    20,
-    r$1 + 1,
-    21,
-    21,
-    r$1 + 1,
-    22,
-    22,
-    r$1 + 1,
-    23,
-    23,
-    r$1 + 1,
-    r$1 + 2,
-    8,
-    r$1 + 11,
-    r$1 + 12,
-    4,
-    28,
-    26,
-    9,
-    27,
-    r$1 + 10,
-    24,
-    r$1 + 8,
-    r$1 + 9,
-    8,
-    29,
-    r$1 + 7,
-    9,
-    r$1 + 6,
-    r$1 + 7,
-    3,
-    r$1 + 3,
-    31,
-    4,
-    r$1 + 4,
-    r$1 + 5,
+    -1, 1, -1,
+    0, 30, 3,
+    1, 4, r$1 + 14,
+    2, 5, r$1 + 14,
+    3, 25, 6,
+    4, 24, 7,
+    5, r$1 + 1, 8,
+    6, 9, r$1 + 13,
+    7, r$1 + 1, 10,
+    10, r$1 + 1, 11,
+    11, r$1 + 1, 12,
+    12, r$1 + 1, 13,
+    13, r$1 + 1, 14,
+    14, r$1 + 1, 15,
+    15, r$1 + 1, 16,
+    16, r$1 + 1, 17,
+    17, r$1 + 1, 18,
+    18, r$1 + 1, 19,
+    19, r$1 + 1, 20,
+    20, r$1 + 1, 21,
+    21, r$1 + 1, 22,
+    22, r$1 + 1, 23,
+    23, r$1 + 1, r$1 + 2,
+    8, r$1 + 11, r$1 + 12,
+    4, 28, 26,
+    9, 27, r$1 + 10,
+    24, r$1 + 8, r$1 + 9,
+    8, 29, r$1 + 7,
+    9, r$1 + 6, r$1 + 7,
+    3, r$1 + 3, 31,
+    4, r$1 + 4, r$1 + 5,
 ]);
 const bdd$1 = BinaryDecisionDiagram.from(nodes$1, root$1, _data$1.conditions, _data$1.results);
 
@@ -45348,10 +45255,9 @@ const createEndpointRuleSetHttpAuthSchemeParametersProvider = (defaultHttpAuthSc
 const _defaultSTSHttpAuthSchemeParametersProvider = async (config, context, input) => {
     return {
         operation: getSmithyContext(context).operation,
-        region: (await normalizeProvider$1(config.region)()) ||
-            (() => {
-                throw new Error("expected `region` to be configured for `aws.auth#sigv4`");
-            })(),
+        region: await normalizeProvider$1(config.region)() || (() => {
+            throw new Error("expected `region` to be configured for `aws.auth#sigv4`");
+        })(),
     };
 };
 const defaultSTSHttpAuthSchemeParametersProvider = createEndpointRuleSetHttpAuthSchemeParametersProvider(_defaultSTSHttpAuthSchemeParametersProvider);
@@ -45634,130 +45540,113 @@ const _s_registry$1 = TypeRegistry.for(_s$1);
 var STSServiceException$ = [-3, _s$1, "STSServiceException", 0, [], []];
 _s_registry$1.registerError(STSServiceException$, STSServiceException);
 const n0_registry$1 = TypeRegistry.for(n0$1);
-var ExpiredTokenException$ = [
-    -3,
-    n0$1,
-    _ETE,
+var ExpiredTokenException$ = [-3, n0$1, _ETE,
     { [_aQE]: [`ExpiredTokenException`, 400], [_e$1]: _c$1, [_hE$1]: 400 },
     [_m$1],
-    [0],
+    [0]
 ];
 n0_registry$1.registerError(ExpiredTokenException$, ExpiredTokenException);
-var IDPCommunicationErrorException$ = [
-    -3,
-    n0$1,
-    _IDPCEE,
+var IDPCommunicationErrorException$ = [-3, n0$1, _IDPCEE,
     { [_aQE]: [`IDPCommunicationError`, 400], [_e$1]: _c$1, [_hE$1]: 400 },
     [_m$1],
-    [0],
+    [0]
 ];
 n0_registry$1.registerError(IDPCommunicationErrorException$, IDPCommunicationErrorException);
-var IDPRejectedClaimException$ = [
-    -3,
-    n0$1,
-    _IDPRCE,
+var IDPRejectedClaimException$ = [-3, n0$1, _IDPRCE,
     { [_aQE]: [`IDPRejectedClaim`, 403], [_e$1]: _c$1, [_hE$1]: 403 },
     [_m$1],
-    [0],
+    [0]
 ];
 n0_registry$1.registerError(IDPRejectedClaimException$, IDPRejectedClaimException);
-var InvalidIdentityTokenException$ = [
-    -3,
-    n0$1,
-    _IITE,
+var InvalidIdentityTokenException$ = [-3, n0$1, _IITE,
     { [_aQE]: [`InvalidIdentityToken`, 400], [_e$1]: _c$1, [_hE$1]: 400 },
     [_m$1],
-    [0],
+    [0]
 ];
 n0_registry$1.registerError(InvalidIdentityTokenException$, InvalidIdentityTokenException);
-var MalformedPolicyDocumentException$ = [
-    -3,
-    n0$1,
-    _MPDE,
+var MalformedPolicyDocumentException$ = [-3, n0$1, _MPDE,
     { [_aQE]: [`MalformedPolicyDocument`, 400], [_e$1]: _c$1, [_hE$1]: 400 },
     [_m$1],
-    [0],
+    [0]
 ];
 n0_registry$1.registerError(MalformedPolicyDocumentException$, MalformedPolicyDocumentException);
-var PackedPolicyTooLargeException$ = [
-    -3,
-    n0$1,
-    _PPTLE,
+var PackedPolicyTooLargeException$ = [-3, n0$1, _PPTLE,
     { [_aQE]: [`PackedPolicyTooLarge`, 400], [_e$1]: _c$1, [_hE$1]: 400 },
     [_m$1],
-    [0],
+    [0]
 ];
 n0_registry$1.registerError(PackedPolicyTooLargeException$, PackedPolicyTooLargeException);
-var RegionDisabledException$ = [
-    -3,
-    n0$1,
-    _RDE,
+var RegionDisabledException$ = [-3, n0$1, _RDE,
     { [_aQE]: [`RegionDisabledException`, 403], [_e$1]: _c$1, [_hE$1]: 403 },
     [_m$1],
-    [0],
+    [0]
 ];
 n0_registry$1.registerError(RegionDisabledException$, RegionDisabledException);
-const errorTypeRegistries$1 = [_s_registry$1, n0_registry$1];
+const errorTypeRegistries$1 = [
+    _s_registry$1,
+    n0_registry$1,
+];
 var accessKeySecretType = [0, n0$1, _aKST, 8, 0];
 var clientTokenType = [0, n0$1, _cTT, 8, 0];
-var AssumedRoleUser$ = [3, n0$1, _ARU, 0, [_ARI, _A], [0, 0], 2];
-var AssumeRoleRequest$ = [
-    3,
-    n0$1,
-    _ARR,
+var AssumedRoleUser$ = [3, n0$1, _ARU,
+    0,
+    [_ARI, _A],
+    [0, 0], 2
+];
+var AssumeRoleRequest$ = [3, n0$1, _ARR,
     0,
     [_RA, _RSN, _PA, _P, _DS, _T, _TTK, _EI, _SN, _TC, _SI, _PC],
-    [0, 0, () => policyDescriptorListType, 0, 1, () => tagListType, 64 | 0, 0, 0, 0, 0, () => ProvidedContextsListType],
-    2,
+    [0, 0, () => policyDescriptorListType, 0, 1, () => tagListType, 64 | 0, 0, 0, 0, 0, () => ProvidedContextsListType], 2
 ];
-var AssumeRoleResponse$ = [
-    3,
-    n0$1,
-    _ARRs,
+var AssumeRoleResponse$ = [3, n0$1, _ARRs,
     0,
     [_C, _ARU, _PPS, _SI],
-    [[() => Credentials$, 0], () => AssumedRoleUser$, 1, 0],
+    [[() => Credentials$, 0], () => AssumedRoleUser$, 1, 0]
 ];
-var AssumeRoleWithWebIdentityRequest$ = [
-    3,
-    n0$1,
-    _ARWWIR,
+var AssumeRoleWithWebIdentityRequest$ = [3, n0$1, _ARWWIR,
     0,
     [_RA, _RSN, _WIT, _PI, _PA, _P, _DS],
-    [0, 0, [() => clientTokenType, 0], 0, () => policyDescriptorListType, 0, 1],
-    3,
+    [0, 0, [() => clientTokenType, 0], 0, () => policyDescriptorListType, 0, 1], 3
 ];
-var AssumeRoleWithWebIdentityResponse$ = [
-    3,
-    n0$1,
-    _ARWWIRs,
+var AssumeRoleWithWebIdentityResponse$ = [3, n0$1, _ARWWIRs,
     0,
     [_C, _SFWIT, _ARU, _PPS, _Pr, _Au, _SI],
-    [[() => Credentials$, 0], 0, () => AssumedRoleUser$, 1, 0, 0, 0],
+    [[() => Credentials$, 0], 0, () => AssumedRoleUser$, 1, 0, 0, 0]
 ];
-var Credentials$ = [
-    3,
-    n0$1,
-    _C,
+var Credentials$ = [3, n0$1, _C,
     0,
     [_AKI, _SAK, _ST, _E],
-    [0, [() => accessKeySecretType, 0], 0, 4],
-    4,
+    [0, [() => accessKeySecretType, 0], 0, 4], 4
 ];
-var PolicyDescriptorType$ = [3, n0$1, _PDT, 0, [_a], [0]];
-var ProvidedContext$ = [3, n0$1, _PCr, 0, [_PAr, _CA], [0, 0]];
-var Tag$ = [3, n0$1, _Ta, 0, [_K, _V], [0, 0], 2];
-var policyDescriptorListType = [1, n0$1, _pDLT, 0, () => PolicyDescriptorType$];
-var ProvidedContextsListType = [1, n0$1, _PCLT, 0, () => ProvidedContext$];
-var tagListType = [1, n0$1, _tLT, 0, () => Tag$];
-var AssumeRole$ = [9, n0$1, _AR, 0, () => AssumeRoleRequest$, () => AssumeRoleResponse$];
-var AssumeRoleWithWebIdentity$ = [
-    9,
-    n0$1,
-    _ARWWI,
+var PolicyDescriptorType$ = [3, n0$1, _PDT,
     0,
-    () => AssumeRoleWithWebIdentityRequest$,
-    () => AssumeRoleWithWebIdentityResponse$,
+    [_a],
+    [0]
+];
+var ProvidedContext$ = [3, n0$1, _PCr,
+    0,
+    [_PAr, _CA],
+    [0, 0]
+];
+var Tag$ = [3, n0$1, _Ta,
+    0,
+    [_K, _V],
+    [0, 0], 2
+];
+var policyDescriptorListType = [1, n0$1, _pDLT,
+    0, () => PolicyDescriptorType$
+];
+var ProvidedContextsListType = [1, n0$1, _PCLT,
+    0, () => ProvidedContext$
+];
+var tagListType = [1, n0$1, _tLT,
+    0, () => Tag$
+];
+var AssumeRole$ = [9, n0$1, _AR,
+    0, () => AssumeRoleRequest$, () => AssumeRoleResponse$
+];
+var AssumeRoleWithWebIdentity$ = [9, n0$1, _ARWWI,
+    0, () => AssumeRoleWithWebIdentityRequest$, () => AssumeRoleWithWebIdentityResponse$
 ];
 
 const getRuntimeConfig$3 = (config) => {
@@ -45820,13 +45709,11 @@ const getRuntimeConfig$2 = (config) => {
         defaultsMode,
         authSchemePreference: config?.authSchemePreference ?? loadConfig(NODE_AUTH_SCHEME_PREFERENCE_OPTIONS, loaderConfig),
         bodyLengthChecker: config?.bodyLengthChecker ?? calculateBodyLength,
-        defaultUserAgentProvider: config?.defaultUserAgentProvider ??
-            createDefaultUserAgentProvider({ serviceId: clientSharedValues.serviceId, clientVersion: packageInfo.version }),
+        defaultUserAgentProvider: config?.defaultUserAgentProvider ?? createDefaultUserAgentProvider({ serviceId: clientSharedValues.serviceId, clientVersion: packageInfo.version }),
         httpAuthSchemes: config?.httpAuthSchemes ?? [
             {
                 schemeId: "aws.auth#sigv4",
-                identityProvider: (ipc) => ipc.getIdentityProvider("aws.auth#sigv4") ||
-                    (async (idProps) => await config.credentialDefaultProvider(idProps?.__config || {})()),
+                identityProvider: (ipc) => ipc.getIdentityProvider("aws.auth#sigv4") || (async (idProps) => await config.credentialDefaultProvider(idProps?.__config || {})()),
                 signer: new AwsSdkSigV4Signer(),
             },
             {
@@ -45841,8 +45728,7 @@ const getRuntimeConfig$2 = (config) => {
             },
         ],
         maxAttempts: config?.maxAttempts ?? loadConfig(NODE_MAX_ATTEMPT_CONFIG_OPTIONS, config),
-        region: config?.region ??
-            loadConfig(NODE_REGION_CONFIG_OPTIONS, { ...NODE_REGION_CONFIG_FILE_OPTIONS, ...loaderConfig }),
+        region: config?.region ?? loadConfig(NODE_REGION_CONFIG_OPTIONS, { ...NODE_REGION_CONFIG_FILE_OPTIONS, ...loaderConfig }),
         requestHandler: NodeHttpHandler.create(config?.requestHandler ?? defaultConfigProvider),
         retryMode: config?.retryMode ??
             loadConfig({
@@ -46120,10 +46006,9 @@ var index$1 = /*#__PURE__*/Object.freeze({
 const defaultSigninHttpAuthSchemeParametersProvider = async (config, context, input) => {
     return {
         operation: getSmithyContext(context).operation,
-        region: (await normalizeProvider$1(config.region)()) ||
-            (() => {
-                throw new Error("expected `region` to be configured for `aws.auth#sigv4`");
-            })(),
+        region: await normalizeProvider$1(config.region)() || (() => {
+            throw new Error("expected `region` to be configured for `aws.auth#sigv4`");
+        })(),
     };
 };
 function createAwsAuthSigv4HttpAuthOption(authParameters) {
@@ -46181,7 +46066,7 @@ const commonParams = {
 };
 
 const m = "ref";
-const a = -1, b = true, c = "isSet", d = "PartitionResult", e = "booleanEquals", f = "getAttr", g = "stringEquals", h = { [m]: "Endpoint" }, i = { [m]: d }, j = { fn: f, argv: [i, "name"] }, k = {}, l = [{ [m]: "Region" }];
+const a = -1, b = true, c = "isSet", d = "PartitionResult", e = "booleanEquals", f = "getAttr", g = "stringEquals", h = { [m]: "Endpoint" }, i = { [m]: d }, j = { "fn": f, "argv": [i, "name"] }, k = {}, l = [{ [m]: "Region" }];
 const _data = {
     conditions: [
         [c, [h]],
@@ -46193,7 +46078,7 @@ const _data = {
         [e, [{ fn: f, argv: [i, "supportsFIPS"] }, b]],
         [g, [j, "aws"]],
         [g, [j, "aws-cn"]],
-        [g, [j, "aws-us-gov"]],
+        [g, [j, "aws-us-gov"]]
     ],
     results: [
         [a],
@@ -46210,60 +46095,28 @@ const _data = {
         ["https://signin.{Region}.{PartitionResult#dualStackDnsSuffix}", k],
         [a, "DualStack is enabled but this partition does not support DualStack"],
         ["https://signin.{Region}.{PartitionResult#dnsSuffix}", k],
-        [a, "Invalid Configuration: Missing Region"],
-    ],
+        [a, "Invalid Configuration: Missing Region"]
+    ]
 };
 const root = 2;
 const r = 100_000_000;
 const nodes = new Int32Array([
-    -1,
-    1,
-    -1,
-    0,
-    15,
-    3,
-    1,
-    4,
-    r + 14,
-    2,
-    5,
-    r + 14,
-    3,
-    11,
-    6,
-    4,
-    10,
-    7,
-    7,
-    r + 4,
-    8,
-    8,
-    r + 5,
-    9,
-    9,
-    r + 6,
-    r + 13,
-    5,
-    r + 11,
-    r + 12,
-    4,
-    13,
-    12,
-    6,
-    r + 9,
-    r + 10,
-    5,
-    14,
-    r + 8,
-    6,
-    r + 7,
-    r + 8,
-    3,
-    r + 1,
-    16,
-    4,
-    r + 2,
-    r + 3,
+    -1, 1, -1,
+    0, 15, 3,
+    1, 4, r + 14,
+    2, 5, r + 14,
+    3, 11, 6,
+    4, 10, 7,
+    7, r + 4, 8,
+    8, r + 5, 9,
+    9, r + 6, r + 13,
+    5, r + 11, r + 12,
+    4, 13, 12,
+    6, r + 9, r + 10,
+    5, 14, r + 8,
+    6, r + 7, r + 8,
+    3, r + 1, 16,
+    4, r + 2, r + 3,
 ]);
 const bdd = BinaryDecisionDiagram.from(nodes, root, _data.conditions, _data.results);
 
@@ -46382,85 +46235,62 @@ const _s_registry = TypeRegistry.for(_s);
 var SigninServiceException$ = [-3, _s, "SigninServiceException", 0, [], []];
 _s_registry.registerError(SigninServiceException$, SigninServiceException);
 const n0_registry = TypeRegistry.for(n0);
-var AccessDeniedException$ = [-3, n0, _ADE, { [_e]: _c }, [_e, _m], [0, 0], 2];
+var AccessDeniedException$ = [-3, n0, _ADE,
+    { [_e]: _c },
+    [_e, _m],
+    [0, 0], 2
+];
 n0_registry.registerError(AccessDeniedException$, AccessDeniedException);
-var InternalServerException$ = [-3, n0, _ISE, { [_e]: _se, [_hE]: 500 }, [_e, _m], [0, 0], 2];
+var InternalServerException$ = [-3, n0, _ISE,
+    { [_e]: _se, [_hE]: 500 },
+    [_e, _m],
+    [0, 0], 2
+];
 n0_registry.registerError(InternalServerException$, InternalServerException);
-var TooManyRequestsError$ = [-3, n0, _TMRE, { [_e]: _c, [_hE]: 429 }, [_e, _m], [0, 0], 2];
+var TooManyRequestsError$ = [-3, n0, _TMRE,
+    { [_e]: _c, [_hE]: 429 },
+    [_e, _m],
+    [0, 0], 2
+];
 n0_registry.registerError(TooManyRequestsError$, TooManyRequestsError);
-var ValidationException$ = [-3, n0, _VE, { [_e]: _c, [_hE]: 400 }, [_e, _m], [0, 0], 2];
+var ValidationException$ = [-3, n0, _VE,
+    { [_e]: _c, [_hE]: 400 },
+    [_e, _m],
+    [0, 0], 2
+];
 n0_registry.registerError(ValidationException$, ValidationException);
-const errorTypeRegistries = [_s_registry, n0_registry];
+const errorTypeRegistries = [
+    _s_registry,
+    n0_registry,
+];
 var RefreshToken = [0, n0, _RT, 8, 0];
-var AccessToken$ = [
-    3,
-    n0,
-    _AT,
+var AccessToken$ = [3, n0, _AT,
     8,
     [_aKI, _sAK, _sT],
-    [
-        [0, { [_jN]: _aKI }],
-        [0, { [_jN]: _sAK }],
-        [0, { [_jN]: _sT }],
-    ],
-    3,
+    [[0, { [_jN]: _aKI }], [0, { [_jN]: _sAK }], [0, { [_jN]: _sT }]], 3
 ];
-var CreateOAuth2TokenRequest$ = [
-    3,
-    n0,
-    _COATR,
+var CreateOAuth2TokenRequest$ = [3, n0, _COATR,
     0,
     [_tI],
-    [[() => CreateOAuth2TokenRequestBody$, 16]],
-    1,
+    [[() => CreateOAuth2TokenRequestBody$, 16]], 1
 ];
-var CreateOAuth2TokenRequestBody$ = [
-    3,
-    n0,
-    _COATRB,
+var CreateOAuth2TokenRequestBody$ = [3, n0, _COATRB,
     0,
     [_cI, _gT, _co, _rU, _cV, _rT],
-    [
-        [0, { [_jN]: _cI }],
-        [0, { [_jN]: _gT }],
-        0,
-        [0, { [_jN]: _rU }],
-        [0, { [_jN]: _cV }],
-        [() => RefreshToken, { [_jN]: _rT }],
-    ],
-    2,
+    [[0, { [_jN]: _cI }], [0, { [_jN]: _gT }], 0, [0, { [_jN]: _rU }], [0, { [_jN]: _cV }], [() => RefreshToken, { [_jN]: _rT }]], 2
 ];
-var CreateOAuth2TokenResponse$ = [
-    3,
-    n0,
-    _COATRr,
+var CreateOAuth2TokenResponse$ = [3, n0, _COATRr,
     0,
     [_tO],
-    [[() => CreateOAuth2TokenResponseBody$, 16]],
-    1,
+    [[() => CreateOAuth2TokenResponseBody$, 16]], 1
 ];
-var CreateOAuth2TokenResponseBody$ = [
-    3,
-    n0,
-    _COATRBr,
+var CreateOAuth2TokenResponseBody$ = [3, n0, _COATRBr,
     0,
     [_aT, _tT, _eI, _rT, _iT],
-    [
-        [() => AccessToken$, { [_jN]: _aT }],
-        [0, { [_jN]: _tT }],
-        [1, { [_jN]: _eI }],
-        [() => RefreshToken, { [_jN]: _rT }],
-        [0, { [_jN]: _iT }],
-    ],
-    4,
+    [[() => AccessToken$, { [_jN]: _aT }], [0, { [_jN]: _tT }], [1, { [_jN]: _eI }], [() => RefreshToken, { [_jN]: _rT }], [0, { [_jN]: _iT }]], 4
 ];
-var CreateOAuth2Token$ = [
-    9,
-    n0,
-    _COAT,
-    { [_h]: ["POST", "/v1/token", 200] },
-    () => CreateOAuth2TokenRequest$,
-    () => CreateOAuth2TokenResponse$,
+var CreateOAuth2Token$ = [9, n0, _COAT,
+    { [_h]: ["POST", "/v1/token", 200] }, () => CreateOAuth2TokenRequest$, () => CreateOAuth2TokenResponse$
 ];
 
 const getRuntimeConfig$1 = (config) => {
@@ -46516,11 +46346,9 @@ const getRuntimeConfig = (config) => {
         defaultsMode,
         authSchemePreference: config?.authSchemePreference ?? loadConfig(NODE_AUTH_SCHEME_PREFERENCE_OPTIONS, loaderConfig),
         bodyLengthChecker: config?.bodyLengthChecker ?? calculateBodyLength,
-        defaultUserAgentProvider: config?.defaultUserAgentProvider ??
-            createDefaultUserAgentProvider({ serviceId: clientSharedValues.serviceId, clientVersion: packageInfo.version }),
+        defaultUserAgentProvider: config?.defaultUserAgentProvider ?? createDefaultUserAgentProvider({ serviceId: clientSharedValues.serviceId, clientVersion: packageInfo.version }),
         maxAttempts: config?.maxAttempts ?? loadConfig(NODE_MAX_ATTEMPT_CONFIG_OPTIONS, config),
-        region: config?.region ??
-            loadConfig(NODE_REGION_CONFIG_OPTIONS, { ...NODE_REGION_CONFIG_FILE_OPTIONS, ...loaderConfig }),
+        region: config?.region ?? loadConfig(NODE_REGION_CONFIG_OPTIONS, { ...NODE_REGION_CONFIG_FILE_OPTIONS, ...loaderConfig }),
         requestHandler: NodeHttpHandler.create(config?.requestHandler ?? defaultConfigProvider),
         retryMode: config?.retryMode ??
             loadConfig({
