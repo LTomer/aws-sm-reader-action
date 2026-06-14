@@ -1,0 +1,53 @@
+name: Update Version Tags
+
+on:
+  push:
+    # Triggers the workflow only when a full semantic version tag is pushed
+    tags:
+      - 'v[0-9]+.[0-9]+.[0-9]+'
+
+permissions:
+  contents: write
+
+jobs:
+  update-tags:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Extract Semantic Versions
+        id: pre_version
+        run: |
+          # Example input: refs/tags/v1.2.3
+          RAW_TAG=${{ github.ref_name }}
+
+          # Clean version string (1.2.3)
+          VERSION=${RAW_TAG#v}
+
+          # Parse version components using dot separators
+          MAJOR=$(echo "$VERSION" | cut -d. -f1)
+          MINOR=$(echo "$VERSION" | cut -d. -f2)
+          PATCH=$(echo "$VERSION" | cut -d. -f3)
+
+          # Construct and set output versions
+          echo "v_major=v${MAJOR}" >> $GITHUB_OUTPUT
+          echo "v_minor=v${MAJOR}.${MINOR}" >> $GITHUB_OUTPUT
+          echo "v_patch=v${MAJOR}.${MINOR}.${PATCH}" >> $GITHUB_OUTPUT
+
+      - name: Update Major and Minor Tags
+        run: |
+          # Fetch the current commit SHA where the release happened
+          COMMIT_SHA=${{ github.sha }}
+
+          echo "Moving major and minor tags to commit: $COMMIT_SHA"
+
+          # Force create/update local tags to point to the current commit
+          git tag -f ${{ steps.pre_version.outputs.v_major }} $COMMIT_SHA
+          git tag -f ${{ steps.pre_version.outputs.v_minor }} $COMMIT_SHA
+
+          # Force push the updated tags to the remote repository
+          git push origin -f ${{ steps.pre_version.outputs.v_major }}
+          git push origin -f ${{ steps.pre_version.outputs.v_minor }}

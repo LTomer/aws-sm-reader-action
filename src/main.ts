@@ -62,6 +62,10 @@ export async function run(): Promise<void> {
           currentRegion = varAssign.value
           core.debug(`region set to ${currentRegion}`)
         } else {
+          // ISSUE: Hardcoded Secrets in Logs
+          // Mask the variable value just in case it contains sensitive information,
+          // preventing it from appearing in any subsequent logs.
+          core.setSecret(varAssign.value)
           vars[varAssign.key] = varAssign.value
           core.debug(`var set: ${varAssign.key}`)
         }

@@ -42488,12 +42488,22 @@ function actionB64Var(secret, field, outputVar) {
 }
 function actionRep(secret, templateFile, outputVar) {
     const kv = requireKV(secret, 'rep');
-    if (!fs.existsSync(templateFile)) {
-        throw new Error(`Template file not found: ${templateFile}`);
+    // ISSUE: Path Traversal Risk in actionRep
+    // Ensure the template file is within the workspace
+    const workspace = process.env.GITHUB_WORKSPACE ?? process.cwd();
+    const absoluteTemplatePath = path.resolve(workspace, templateFile);
+    if (!absoluteTemplatePath.startsWith(path.resolve(workspace))) {
+        throw new Error(`Template file must be within the workspace: ${templateFile}`);
     }
-    let content = fs.readFileSync(templateFile, 'utf8');
+    if (!fs.existsSync(absoluteTemplatePath)) {
+        throw new Error(`Template file not found: ${absoluteTemplatePath}`);
+    }
+    let content = fs.readFileSync(absoluteTemplatePath, 'utf8');
     for (const [k, v] of Object.entries(kv)) {
-        const re = new RegExp(`__${k}__`, 'g');
+        // ISSUE: Potential Command Injection in actionRep
+        // Escape regex special characters in the key to prevent regex injection
+        const escapedKey = k.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        const re = new RegExp(`__${escapedKey}__`, 'g');
         content = content.replace(re, String(v));
     }
     const filePath = tempFile(outputVar);
@@ -42541,6 +42551,10 @@ async function run() {
                     debug(`region set to ${currentRegion}`);
                 }
                 else {
+                    // ISSUE: Hardcoded Secrets in Logs
+                    // Mask the variable value just in case it contains sensitive information,
+                    // preventing it from appearing in any subsequent logs.
+                    setSecret(varAssign.value);
                     vars[varAssign.key] = varAssign.value;
                     debug(`var set: ${varAssign.key}`);
                 }

@@ -21,6 +21,26 @@ Configure AWS credentials before this action using
     aws-region: us-east-1
 ```
 
+## Usage
+
+To use this action in your workflow, reference it using any of the following
+version tags:
+
+```yaml
+steps:
+  # Recommended: Automatically gets non-breaking updates and bug fixes
+  - name: Run My Action
+    uses: your-username/your-repo-name@v1
+
+  # Locks to minor updates only
+  - name: Run My Action
+    uses: your-username/your-repo-name@v1.0
+
+  # Locks to an exact, specific release
+  - name: Run My Action
+    uses: your-username/your-repo-name@v1.0.0
+```
+
 ---
 
 ## Inputs
