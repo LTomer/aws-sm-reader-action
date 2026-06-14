@@ -209,16 +209,22 @@ target secret.
 
 ---
 
-## Releasing
+## 🚀 How to Release New Versions (For Developers)
 
-Run the release script to tag and push a new version:
+We use a hybrid approach to release new versions safely:
 
-```bash
-./script/release
-```
+1. Ensure your local `main` branch is fully updated and all changes are
+   committed.
+2. Run the local release script to validate your versioning setup:
+   ```bash
+   ./script/release.sh
+   ```
+3. Enter the new semantic version (e.g., `v1.0.0`) when prompted.
+4. The script will push the exact tag to GitHub.
 
-The script prompts for a version tag (`vX.Y.Z`), creates the tag, and syncs the
-major tag (e.g. `v1`). After pushing, create a GitHub Release from the tag.
+**Note:** Do not create or move major (`v1`) or minor (`v1.0`) tags manually.
+The automated GitHub Action workflow will instantly catch the push event,
+generate the rolling versions, and point them to your latest commit.
 
 Always run `npm run bundle` before releasing to ensure `dist/index.js` is up to
 date.
