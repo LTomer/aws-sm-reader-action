@@ -1,4 +1,4 @@
-name: AWS Secrets Manager Reader
+name: AWS Secrets Manager Reader | Retrieve secrets
 description:
   Read secrets from AWS Secrets Manager and expose them as masked environment
   variables
