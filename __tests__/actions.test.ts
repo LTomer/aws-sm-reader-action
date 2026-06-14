@@ -4,7 +4,6 @@ import * as core from '../__fixtures__/core.js'
 jest.unstable_mockModule('@actions/core', () => core)
 
 import * as fs from 'fs'
-import * as os from 'os'
 import * as path from 'path'
 
 const {
@@ -112,7 +111,7 @@ describe('actionB64Var', () => {
 
 describe('actionRep', () => {
   it('replaces __KEY__ placeholders in template', () => {
-    const tplPath = path.join(os.tmpdir(), `test-tpl-${Date.now()}.txt`)
+    const tplPath = path.join(process.cwd(), `test-tpl-${Date.now()}.txt`)
     fs.writeFileSync(tplPath, 'host=__host__ pass=__password__')
     actionRep({ host: 'localhost', password: 'abc' }, tplPath, 'OUT')
     const calls = (core.exportVariable as jest.Mock).mock.calls as [
@@ -126,7 +125,7 @@ describe('actionRep', () => {
   })
 
   it('throws when template file missing', () => {
-    expect(() => actionRep(KV, '/nonexistent/file.txt', 'OUT')).toThrow(
+    expect(() => actionRep(KV, 'nonexistent-file.txt', 'OUT')).toThrow(
       'Template file not found'
     )
   })
