@@ -4,7 +4,7 @@ on:
   push:
     # Triggers the workflow only when a full semantic version tag is pushed
     tags:
-      - "v[0-9]+.[0-9]+.[0-9]+"
+      - 'v[0-9]+.[0-9]+.[0-9]+'
 
 permissions:
   contents: write
