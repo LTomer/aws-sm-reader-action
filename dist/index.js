@@ -42933,6 +42933,10 @@ async function run() {
                 }
                 continue;
             }
+            else if (line.includes('<=')) {
+                setFailed(`Line ${lineNum}: Invalid variable assignment syntax. Variable names must start with a letter and contain only alphanumeric characters or underscores.`);
+                continue;
+            }
             const action = parseActionLine(line);
             if (!action) {
                 warning(`Line ${lineNum}: unrecognised — skipped`);

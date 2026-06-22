@@ -91,4 +91,16 @@ describe('run()', () => {
 
     expect(getSecret).toHaveBeenCalledWith('myapp/db', 'eu-west-1')
   })
+
+  it('fails on invalid variable assignment syntax', async () => {
+    core.getInput.mockImplementation((name: string) => {
+      if (name === 'source-type') return 'inline'
+      if (name === 'data') return 'invalid-var-name! <= value'
+      return ''
+    })
+    await run()
+    expect(core.setFailed).toHaveBeenCalledWith(
+      expect.stringContaining('Invalid variable assignment syntax')
+    )
+  })
 })

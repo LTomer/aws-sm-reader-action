@@ -70,6 +70,11 @@ export async function run(): Promise<void> {
           core.debug(`var set: ${varAssign.key}`)
         }
         continue
+      } else if (line.includes('<=')) {
+        core.setFailed(
+          `Line ${lineNum}: Invalid variable assignment syntax. Variable names must start with a letter and contain only alphanumeric characters or underscores.`
+        )
+        continue
       }
 
       const action = parseActionLine(line)
