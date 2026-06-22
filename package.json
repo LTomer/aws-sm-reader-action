@@ -1,7 +1,7 @@
 {
   "name": "aws-sm-reader-action",
   "description": "GitHub Action to read secrets from AWS Secrets Manager",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "author": "LTomer",
   "type": "module",
   "private": true,
